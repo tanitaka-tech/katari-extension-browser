@@ -77,6 +77,26 @@ declare module "@katari/ext" {
       key?: string;
       onChange?: (value: string) => unknown;
     }): UiNode;
+    /**
+     * ボタンを押すと上に浮くポップアップ（ブラウザのメニュー相当）。`collapsible` と違って
+     * 下のコンテンツを押し出さないので、`webview` を含むタブでも使える。
+     * 開閉は既定でエディタ側が保持する（`open` を渡した場合のみ拡張が制御し、
+     * `onOpenChange` で更新する）。
+     */
+    popover(
+      label: string,
+      children: UiNode[],
+      props?: {
+        variant?: "default" | "primary" | "danger" | "ghost";
+        disabled?: boolean;
+        /** 明示すると開閉を拡張が制御する。 */
+        open?: boolean;
+        /** ポップアップの幅(px)。 */
+        width?: number;
+        key?: string;
+        onOpenChange?: (open: boolean) => unknown;
+      },
+    ): UiNode;
     list(props: {
       items: Array<{ id: string; label: string; selected?: boolean }>;
       key?: string;

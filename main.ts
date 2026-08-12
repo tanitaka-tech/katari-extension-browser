@@ -13,14 +13,12 @@
 import { katari, ui } from "@katari/ext";
 
 type Scope = "editor" | "project";
-type Menu = "fav" | "history" | null;
 
 type Tab = {
   input: string;
   url: string;
   /** 訪問履歴（新しい順、重複した連続 URL は積まない）。 */
   history: string[];
-  menu: Menu;
 };
 
 // native 子 webview 描画なので、X-Frame-Options で埋め込みを拒否するサイトも初期ページにできる。
@@ -36,10 +34,10 @@ const STATE_BUDGET = 3000;
 
 // お気に入り URL（scope ごと）。onStartup で storage からロードするモジュールキャッシュ。
 const favorites: Record<Scope, string[]> = { editor: [], project: [] };
-// 設定パネルの「追加」入力バッファ（scope ごと）。
-const addInput: Record<Scope, string> = { editor: "", project: "" };
 // 設定パネルで行を開いて URL を編集中のバッファ（`${scope}:${index}` → 入力値）。
 const editInput: Record<string, string> = {};
+/** 設定タブの `＋` で追加する既定 URL（追加後に行を開いて編集する前提）。 */
+const NEW_FAVORITE_BASE = "https://example.com/";
 
 let restoreSeq = 0;
 function newRestoreId(): string {
@@ -152,6 +150,15 @@ async function replaceFavorite(scope: Scope, index: number, raw: string): Promis
   await saveFavorites(scope, next);
 }
 
+/** `＋` で足す既定 URL。既にあれば連番を付けて必ず新しい行になるようにする。 */
+function newFavoriteUrl(scope: Scope): string {
+  if (!favorites[scope].includes(NEW_FAVORITE_BASE)) return NEW_FAVORITE_BASE;
+  for (let i = 2; ; i++) {
+    const candidate = `${NEW_FAVORITE_BASE}${i}`;
+    if (!favorites[scope].includes(candidate)) return candidate;
+  }
+}
+
 const SCOPE_TITLE: Record<Scope, string> = {
   editor: "エディタお気に入り",
   project: "プロジェクトお気に入り",
@@ -165,8 +172,8 @@ function renderFavPanel(scope: Scope) {
     ui.heading(scope === "editor" ? "お気に入り URL（エディタ共通）" : "お気に入り URL（このプロジェクト）"),
     ui.text(
       scope === "editor"
-        ? "すべてのプロジェクトで共有されます。行をクリックすると URL を編集できます。"
-        : "現在のプロジェクトにのみ保存されます（project-settings に含まれます）。行をクリックすると URL を編集できます。",
+        ? "すべてのプロジェクトで共有されます。＋ で追加し、行をクリックして URL を編集します。"
+        : "現在のプロジェクトにのみ保存されます（project-settings に含まれます）。＋ で追加し、行をクリックして URL を編集します。",
       { muted: true },
     ),
     ui.inspectorList({
@@ -202,41 +209,13 @@ function renderFavPanel(scope: Scope) {
           ]),
         ],
       })),
-      onAdd: () => {
-        if (!addInput[scope].trim()) {
-          void katari.ui.toast("下の欄に URL を入れてから ＋ を押してください", "info");
-          return;
-        }
-        void addFavorite(scope, addInput[scope]);
-        addInput[scope] = "";
-      },
+      // ＋ は既定 URL の行をそのまま足す（行を開いて URL を書き換える運用）。
+      onAdd: () => void addFavorite(scope, newFavoriteUrl(scope)),
       onRemove: ({ id }) => {
         if (id) void removeFavorite(scope, id);
       },
       onReorder: ({ from, to }) => void moveFavorite(scope, from, to),
     }),
-    ui.row([
-      ui.textField({
-        value: addInput[scope],
-        placeholder: "https://…",
-        key: `add:${scope}`,
-        onChange: (v) => {
-          addInput[scope] = v;
-        },
-        onSubmit: (v) => {
-          void addFavorite(scope, v);
-          addInput[scope] = "";
-        },
-      }),
-      ui.button({
-        label: "追加",
-        variant: "primary",
-        onClick: () => {
-          void addFavorite(scope, addInput[scope]);
-          addInput[scope] = "";
-        },
-      }),
-    ]),
   ]);
 }
 
@@ -275,7 +254,6 @@ function openTab(
     input: initialUrl,
     url: initialUrl,
     history: initialHistory.slice(0, HISTORY_MAX),
-    menu: null,
   };
   let viewId = "";
 
@@ -307,11 +285,6 @@ function openTab(
     if (viewId && title) katari.window.setTitle(viewId, title);
   };
 
-  const setMenu = (next: Menu) => {
-    tab.menu = tab.menu === next ? null : next;
-    katari.refresh();
-  };
-
   /** お気に入り一覧（scope 1 つ分）。クリックで移動、× で削除、ドラッグで並べ替え。 */
   const favList = (scope: Scope) =>
     ui.inspectorList({
@@ -326,59 +299,70 @@ function openTab(
       onReorder: ({ from, to }) => void moveFavorite(scope, from, to),
     });
 
-  /** ★メニュー: 現在ページのトグル 2 つ + お気に入り一覧（エディタ → プロジェクトの順）。 */
-  const favMenu = () =>
-    ui.group([
-      ui.row([
-        ui.checkbox({
-          label: "エディタお気に入り",
-          value: isFavorite("editor", tab.url),
-          key: "fav-toggle-editor",
-          onChange: () => void toggleFavorite("editor", tab.url),
-        }),
-        ui.checkbox({
-          label: "プロジェクトお気に入り",
-          value: isFavorite("project", tab.url),
-          key: "fav-toggle-project",
-          onChange: () => void toggleFavorite("project", tab.url),
-        }),
-      ]),
-      favList("editor"),
-      favList("project"),
-    ]);
+  /**
+   * ★メニュー: 現在ページのトグル 2 つ + お気に入り一覧（エディタ → プロジェクトの順）。
+   * ポップアップなので webview を押し出さない（開いている間だけ webview が隠れる）。
+   */
+  const favMenu = (favorited: boolean) =>
+    ui.popover(
+      favorited ? "★" : "☆",
+      [
+        ui.row([
+          ui.checkbox({
+            label: "エディタお気に入り",
+            value: isFavorite("editor", tab.url),
+            key: "fav-toggle-editor",
+            onChange: () => void toggleFavorite("editor", tab.url),
+          }),
+          ui.checkbox({
+            label: "プロジェクトお気に入り",
+            value: isFavorite("project", tab.url),
+            key: "fav-toggle-project",
+            onChange: () => void toggleFavorite("project", tab.url),
+          }),
+        ]),
+        favList("editor"),
+        favList("project"),
+      ],
+      { key: "fav-menu", variant: "ghost", width: 360 },
+    );
 
   /** 🕘メニュー: このタブの訪問履歴（新しい順）。クリックで移動、× で 1 件削除。 */
   const historyMenu = () =>
-    ui.group([
-      ui.row([
-        ui.text(`${tab.history.length} 件（最大 ${HISTORY_MAX}）`, { muted: true, key: "hcount" }),
-        ui.button({
-          label: "履歴を消去",
-          variant: "ghost",
-          disabled: tab.history.length === 0,
-          onClick: () => {
-            tab.history = [];
+    ui.popover(
+      "🕘",
+      [
+        ui.row([
+          ui.text(`${tab.history.length} 件（最大 ${HISTORY_MAX}）`, { muted: true, key: "hcount" }),
+          ui.button({
+            label: "履歴を消去",
+            variant: "ghost",
+            disabled: tab.history.length === 0,
+            onClick: () => {
+              tab.history = [];
+              persist();
+              katari.refresh();
+            },
+          }),
+        ]),
+        ui.inspectorList({
+          key: "history",
+          title: "履歴（新しい順）",
+          emptyText: "まだ移動していません",
+          // 履歴は時系列なので並べ替えは無効（ハンドルも出さない）。
+          reorderDisabled: true,
+          // 同じ URL を何度も訪れるので、id には位置を混ぜて一意にする。
+          items: tab.history.map((url, i) => ({ id: `${i}:${url}`, label: labelOf(url) })),
+          onSelect: (id) => navigate(id.slice(id.indexOf(":") + 1)),
+          onRemove: ({ index }) => {
+            tab.history = tab.history.filter((_, i) => i !== index);
             persist();
             katari.refresh();
           },
         }),
-      ]),
-      ui.inspectorList({
-        key: "history",
-        title: "履歴（新しい順）",
-        emptyText: "まだ移動していません",
-        // 履歴は時系列なので並べ替えは無効（ハンドルも出さない）。
-        reorderDisabled: true,
-        // 同じ URL を何度も訪れるので、id には位置を混ぜて一意にする。
-        items: tab.history.map((url, i) => ({ id: `${i}:${url}`, label: labelOf(url) })),
-        onSelect: (id) => navigate(id.slice(id.indexOf(":") + 1)),
-        onRemove: ({ index }) => {
-          tab.history = tab.history.filter((_, i) => i !== index);
-          persist();
-          katari.refresh();
-        },
-      }),
-    ]);
+      ],
+      { key: "history-menu", variant: "ghost", width: 360 },
+    );
 
   viewId = katari.window.open({
     title: hostOf(initialUrl),
@@ -405,23 +389,12 @@ function openTab(
             },
             onSubmit: (v) => navigate(v),
           }),
-          // お気に入り / 履歴メニューの開閉（ネイティブ webview は最前面に描かれるので、
-          // ポップアップではなくツールバー直下へインラインで開く）。
-          ui.button({
-            label: favorited ? "★ ▾" : "☆ ▾",
-            variant: tab.menu === "fav" ? "primary" : "ghost",
-            onClick: () => setMenu("fav"),
-          }),
-          ui.button({
-            label: "🕘 ▾",
-            variant: tab.menu === "history" ? "primary" : "ghost",
-            onClick: () => setMenu("history"),
-          }),
+          // お気に入り / 履歴はポップアップメニュー（ページを押し出さない）。
+          favMenu(favorited),
+          historyMenu(),
           // 新しいタブは、この（元）タブの隣に開く。
           ui.button({ label: "＋", variant: "ghost", onClick: () => openTab(HOME, newRestoreId(), viewId) }),
         ]),
-        ...(tab.menu === "fav" ? [favMenu()] : []),
-        ...(tab.menu === "history" ? [historyMenu()] : []),
         ui.webview({
           url: tab.url,
           grow: true,
