@@ -4,23 +4,24 @@
  * `ui.webview({ native: true })`（ネイティブ子 webview、Katari ADR-0076）で任意の
  * https ページを Dock タブに表示する。X-Frame-Options 拒否サイトも表示できる。
  * タブは Dock 位置 + URL ごと永続化され、再起動後に復元される（`restoreId` + `onRestore`）。
+ *
+ * お気に入り URL を「エディタ設定 / プロジェクト設定」の拡張タブで編集でき、
+ * ブラウザ内に一覧表示してクリックで移動できる（`katari.settings` + `katari.storage`）。
  */
 import { katari, ui } from "@katari/ext";
 
-type Tab = {
-  /** URL バーの入力中テキスト（未確定でもよい）。 */
-  input: string;
-  /** webview に実際に読み込んでいる URL。 */
-  url: string;
-  /** 再読込用の世代番号。key に含めて remount させる。 */
-  gen: number;
-};
+type Tab = { input: string; url: string; gen: number };
 
-// native 子 webview 描画なので、X-Frame-Options で埋め込みを拒否するサイト
-// （developer.mozilla.org 等）も初期ページにできる。
+type Scope = "editor" | "project";
+
+// native 子 webview 描画なので、X-Frame-Options で埋め込みを拒否するサイトも初期ページにできる。
 const HOME = "https://developer.mozilla.org/";
 
-/** 復元用の安定 id を採番する（タブごとに一意）。 */
+// お気に入り URL（scope ごと）。onStartup で storage からロードするモジュールキャッシュ。
+const favorites: Record<Scope, string[]> = { editor: [], project: [] };
+// 設定パネルの「追加」入力バッファ（scope ごと）。
+const addInput: Record<Scope, string> = { editor: "", project: "" };
+
 let restoreSeq = 0;
 function newRestoreId(): string {
   return `tab-${Date.now().toString(36)}-${restoreSeq++}`;
@@ -39,6 +40,121 @@ function normalize(raw: string): string | null {
   }
 }
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname || url;
+  } catch {
+    return url;
+  }
+}
+
+function asUrlList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+// -------------------------------------------------------------- お気に入り
+
+async function loadFavorites(): Promise<void> {
+  favorites.editor = asUrlList(await katari.storage.editor.get("favorites"));
+  favorites.project = asUrlList(await katari.storage.project.get("favorites"));
+  katari.refresh(); // ロード完了後に設定パネル / ブラウザ view を描き直す。
+}
+
+async function addFavorite(scope: Scope, raw: string): Promise<void> {
+  const url = normalize(raw);
+  if (!url) {
+    void katari.ui.toast("https の URL を入力してください", "warning");
+    return;
+  }
+  if (favorites[scope].includes(url)) return;
+  favorites[scope] = [...favorites[scope], url];
+  await katari.storage[scope].set("favorites", favorites[scope]);
+  katari.refresh();
+}
+
+async function removeFavorite(scope: Scope, url: string): Promise<void> {
+  favorites[scope] = favorites[scope].filter((u) => u !== url);
+  await katari.storage[scope].set("favorites", favorites[scope]);
+  katari.refresh();
+}
+
+/** 設定タブ（プロジェクト設定 / エディタ設定）のお気に入り編集パネル。 */
+function renderFavPanel(scope: Scope) {
+  const rows = favorites[scope].map((url, i) =>
+    ui.row(
+      [
+        ui.text(url, { key: `t:${i}` }),
+        ui.button({ label: "開く", variant: "ghost", key: `o:${i}`, onClick: () => openTab(url) }),
+        ui.button({
+          label: "削除",
+          variant: "danger",
+          key: `d:${i}`,
+          onClick: () => void removeFavorite(scope, url),
+        }),
+      ],
+      { key: `row:${i}`, align: "center" },
+    ),
+  );
+  return ui.column([
+    ui.heading(scope === "editor" ? "お気に入り URL（エディタ共通）" : "お気に入り URL（このプロジェクト）"),
+    ui.text(
+      scope === "editor"
+        ? "すべてのプロジェクトで共有されます。"
+        : "現在のプロジェクトにのみ保存されます（project-settings に含まれます）。",
+      { muted: true },
+    ),
+    ...rows,
+    ui.separator(),
+    ui.row([
+      ui.textField({
+        value: addInput[scope],
+        placeholder: "https://…",
+        key: `add:${scope}`,
+        onChange: (v) => {
+          addInput[scope] = v;
+        },
+        onSubmit: (v) => {
+          void addFavorite(scope, v);
+          addInput[scope] = "";
+        },
+      }),
+      ui.button({
+        label: "追加",
+        variant: "primary",
+        onClick: () => {
+          void addFavorite(scope, addInput[scope]);
+          addInput[scope] = "";
+        },
+      }),
+    ]),
+  ]);
+}
+
+katari.settings.panel("favEditor", () => renderFavPanel("editor"));
+katari.settings.panel("favProject", () => renderFavPanel("project"));
+
+// -------------------------------------------------------------- ブラウザタブ
+
+/** ブラウザ view 内のお気に入り一覧行（クリックで移動）。空 scope は null。 */
+function favBar(scope: Scope, navigate: (url: string) => void) {
+  const list = favorites[scope];
+  if (list.length === 0) return null;
+  return ui.row(
+    [
+      ui.text(scope === "editor" ? "★共通:" : "★このPJ:", { muted: true, key: "lbl" }),
+      ...list.map((url, i) =>
+        ui.button({
+          label: hostOf(url),
+          variant: "ghost",
+          key: `fav:${scope}:${i}`,
+          onClick: () => navigate(url),
+        }),
+      ),
+    ],
+    { key: `favbar:${scope}`, align: "center" },
+  );
+}
+
 function openTab(initialUrl: string = HOME, restoreId: string = newRestoreId()) {
   const tab: Tab = { input: initialUrl, url: initialUrl, gen: 0 };
   let viewId = "";
@@ -49,11 +165,9 @@ function openTab(initialUrl: string = HOME, restoreId: string = newRestoreId()) 
       void katari.ui.toast("https の URL を入力してください", "warning");
       return;
     }
-    // 同じ URL への「移動」は再読込として扱う（押しても無反応に見えるのを防ぐ）。
     if (url === tab.url) tab.gen++;
     tab.url = url;
     tab.input = url;
-    // 表示中の URL を永続化する（再起動後にこの URL で復元される）。
     if (viewId) katari.window.setState(viewId, { url });
   };
 
@@ -63,8 +177,11 @@ function openTab(initialUrl: string = HOME, restoreId: string = newRestoreId()) 
     height: 640,
     restoreId,
     state: { url: initialUrl },
-    render: () =>
-      ui.column([
+    render: () => {
+      const bars = [favBar("editor", navigate), favBar("project", navigate)].filter(
+        (b): b is NonNullable<typeof b> => b != null,
+      );
+      return ui.column([
         ui.row([
           ui.textField({
             value: tab.input,
@@ -76,34 +193,34 @@ function openTab(initialUrl: string = HOME, restoreId: string = newRestoreId()) 
             onSubmit: (v) => navigate(v),
           }),
           ui.button({ label: "移動", variant: "primary", onClick: () => navigate(tab.input) }),
+          ui.button({ label: "再読込", onClick: () => (tab.gen++, undefined) }),
+          // 現在 URL をお気に入りに追加。
           ui.button({
-            label: "再読込",
-            onClick: () => {
-              tab.gen++;
-            },
+            label: "★共通",
+            variant: "ghost",
+            onClick: () => void addFavorite("editor", tab.url),
           }),
-          // 埋め込みを拒否するサイト（google.com / MDN 等）は iframe では空白になる。
-          // その場合はこのボタンで別 OS ウィンドウ（ネイティブ webview）を開けば表示できる。
           ui.button({
-            label: "別ウィンドウで開く",
-            onClick: () => {
-              const url = normalize(tab.input) ?? tab.url;
-              void katari.window.openExternal(url);
-            },
+            label: "★PJ",
+            variant: "ghost",
+            onClick: () => void addFavorite("project", tab.url),
+          }),
+          ui.button({
+            label: "別ウィンドウ",
+            variant: "ghost",
+            onClick: () => void katari.window.openExternal(normalize(tab.input) ?? tab.url),
           }),
           ui.button({ label: "＋", variant: "ghost", onClick: () => openTab() }),
         ]),
-        // native: ネイティブ子 webview をタブに重ねて描画する（ADR-0076）。
-        // トップレベル文書なので X-Frame-Options / frame-ancestors を受けず、
-        // google.com / MDN などの埋め込み拒否サイトもタブ内に表示できる。
-        // key に gen と url を含める → 「再読込」や URL 変更で作り直す。
+        ...bars,
         ui.webview({
           url: tab.url,
           grow: true,
           native: true,
           key: `wv:${tab.gen}:${tab.url}`,
         }),
-      ]),
+      ]);
+    },
   });
   return viewId;
 }
@@ -120,3 +237,6 @@ katari.window.onRestore((restoreId, state) => {
       : HOME;
   openTab(url, restoreId);
 });
+
+// 起動時にお気に入りをロードする（onStartup activation）。
+void loadFavorites();

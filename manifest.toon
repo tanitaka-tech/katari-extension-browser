@@ -24,3 +24,16 @@ contributes:
   keybindings:
     - command: open
       key: "CmdOrCtrl+Alt+B"
+  settings:
+    - id: favEditor
+      scope: editor
+      title:
+        ja: "ブラウザお気に入り(共通)"
+        en: "Browser Favorites (global)"
+      order: 10
+    - id: favProject
+      scope: project
+      title:
+        ja: "ブラウザお気に入り"
+        en: "Browser Favorites"
+      order: 10

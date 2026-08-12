@@ -103,6 +103,14 @@ declare module "@katari/ext" {
     }): UiNode;
   }
 
+  /** 拡張ストレージ 1 スコープ分の KV。 */
+  export interface ExtStorageScope {
+    get(key: string): Promise<unknown>;
+    set(key: string, value: unknown): Promise<unknown>;
+    remove(key: string): Promise<unknown>;
+    keys(): Promise<string[]>;
+  }
+
   export interface Katari {
     readonly extensionId: string;
     /** エディタの表示言語（`ja` / `en` / `zh-CN` / `ko`）。 */
@@ -119,6 +127,27 @@ declare module "@katari/ext" {
         id: string,
         render: (context: { selection?: unknown }) => UiNode,
       ): void;
+    };
+
+    settings: {
+      /**
+       * manifest の `contributes.settings[].id` に対応する設定パネルの描画関数。
+       * `scope`（project / editor）はそのパネルがどちらの設定ビューに出るか。
+       */
+      panel(
+        id: string,
+        render: (context: { scope: "project" | "editor" }) => UiNode,
+      ): void;
+    };
+
+    /**
+     * 拡張ごとの永続ストレージ。`editor` はプロジェクト非依存のグローバル、
+     * `project` は現在のプロジェクトに紐づく。値は JSON 直列化可能なもの。
+     * 拡張ごとに隔離されており専用権限は不要。
+     */
+    storage: {
+      editor: ExtStorageScope;
+      project: ExtStorageScope;
     };
 
     /** operation registry の操作を直接呼ぶ。読み取りは `project:read` が必要。 */
