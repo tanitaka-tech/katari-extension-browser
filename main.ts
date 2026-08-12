@@ -10,7 +10,7 @@
  */
 import { katari, ui } from "@katari/ext";
 
-type Tab = { input: string; url: string; gen: number };
+type Tab = { input: string; url: string };
 
 type Scope = "editor" | "project";
 
@@ -155,34 +155,53 @@ function favBar(scope: Scope, navigate: (url: string) => void) {
   );
 }
 
-function openTab(initialUrl: string = HOME, restoreId: string = newRestoreId()) {
-  const tab: Tab = { input: initialUrl, url: initialUrl, gen: 0 };
+function openTab(
+  initialUrl: string = HOME,
+  restoreId: string = newRestoreId(),
+  near?: string,
+) {
+  const tab: Tab = { input: initialUrl, url: initialUrl };
   let viewId = "";
 
+  // URL バーからの移動（Enter）。tab.url を変えると webview が navigate される（履歴維持）。
   const navigate = (raw: string) => {
     const url = normalize(raw);
     if (!url) {
       void katari.ui.toast("https の URL を入力してください", "warning");
       return;
     }
-    if (url === tab.url) tab.gen++;
+    tab.url = url;
+    tab.input = url;
+  };
+
+  // 実際の遷移（リンククリック含む）で URL バー・永続状態を追従させる。
+  const onNavigate = (url: string) => {
     tab.url = url;
     tab.input = url;
     if (viewId) katari.window.setState(viewId, { url });
   };
+  // ページタイトルをタブ名にする。
+  const onTitle = (title: string) => {
+    if (viewId && title) katari.window.setTitle(viewId, title);
+  };
 
   viewId = katari.window.open({
-    title: "Browser",
+    title: hostOf(initialUrl),
     width: 900,
     height: 640,
     restoreId,
     state: { url: initialUrl },
+    icon: "🌐",
+    near,
     render: () => {
       const bars = [favBar("editor", navigate), favBar("project", navigate)].filter(
         (b): b is NonNullable<typeof b> => b != null,
       );
       return ui.column([
         ui.row([
+          ui.button({ label: "←", variant: "ghost", onClick: () => void katari.window.webviewBack(viewId) }),
+          ui.button({ label: "→", variant: "ghost", onClick: () => void katari.window.webviewForward(viewId) }),
+          ui.button({ label: "⟳", variant: "ghost", onClick: () => void katari.window.webviewReload(viewId) }),
           ui.textField({
             value: tab.input,
             placeholder: "https://…",
@@ -192,32 +211,19 @@ function openTab(initialUrl: string = HOME, restoreId: string = newRestoreId()) 
             },
             onSubmit: (v) => navigate(v),
           }),
-          ui.button({ label: "移動", variant: "primary", onClick: () => navigate(tab.input) }),
-          ui.button({ label: "再読込", onClick: () => (tab.gen++, undefined) }),
           // 現在 URL をお気に入りに追加。
-          ui.button({
-            label: "★共通",
-            variant: "ghost",
-            onClick: () => void addFavorite("editor", tab.url),
-          }),
-          ui.button({
-            label: "★PJ",
-            variant: "ghost",
-            onClick: () => void addFavorite("project", tab.url),
-          }),
-          ui.button({
-            label: "別ウィンドウ",
-            variant: "ghost",
-            onClick: () => void katari.window.openExternal(normalize(tab.input) ?? tab.url),
-          }),
-          ui.button({ label: "＋", variant: "ghost", onClick: () => openTab() }),
+          ui.button({ label: "★共通", variant: "ghost", onClick: () => void addFavorite("editor", tab.url) }),
+          ui.button({ label: "★PJ", variant: "ghost", onClick: () => void addFavorite("project", tab.url) }),
+          // 新しいタブは、この（元）タブの隣に開く。
+          ui.button({ label: "＋", variant: "ghost", onClick: () => openTab(HOME, newRestoreId(), viewId) }),
         ]),
         ...bars,
         ui.webview({
           url: tab.url,
           grow: true,
           native: true,
-          key: `wv:${tab.gen}:${tab.url}`,
+          onNavigate,
+          onTitle,
         }),
       ]);
     },

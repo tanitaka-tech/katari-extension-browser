@@ -100,6 +100,10 @@ declare module "@katari/ext" {
        * 切り離すと iframe にフォールバックする）。
        */
       native?: boolean;
+      /** native webview の遷移（リンククリック含む）時に新しい URL を受け取る。 */
+      onNavigate?: (url: string) => unknown;
+      /** native webview のページタイトル変化を受け取る（タブ名に使える）。 */
+      onTitle?: (title: string) => unknown;
     }): UiNode;
   }
 
@@ -196,10 +200,20 @@ declare module "@katari/ext" {
         restoreId?: string;
         /** 復元用の小さな状態（URL 等の JSON。4KB まで）。`onRestore` に渡る。 */
         state?: unknown;
+        /** タブアイコン（絵文字 1〜2 文字）。 */
+        icon?: string;
+        /** 開いた元 view の id。指定するとその隣に新タブを配置する。 */
+        near?: string;
       }): string;
       close(viewId: string): void;
       /** ビューの復元用状態を更新する（URL 遷移時などに呼ぶ）。次回起動時に復元される。 */
       setState(viewId: string, state: unknown): void;
+      /** タブのタイトルを更新する（ページ名をタブ名にする等）。 */
+      setTitle(viewId: string, title: string): void;
+      /** native webview（`ui.webview({ native: true })`）の履歴を戻る / 進む / 再読込する。 */
+      webviewBack(viewId: string): Promise<unknown>;
+      webviewForward(viewId: string): Promise<unknown>;
+      webviewReload(viewId: string): Promise<unknown>;
       /**
        * 起動時、前回開いていた復元可能ビューごとに呼ばれる。ハンドラ内で
        * `window.open({ restoreId, state, render })` を呼んで同じビューを復元する。
