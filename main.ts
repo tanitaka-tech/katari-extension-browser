@@ -16,9 +16,9 @@ type Tab = {
   gen: number;
 };
 
-// 初期ページは埋め込み（iframe）を拒否しないサイトであること。
-// developer.mozilla.org や google.com は X-Frame-Options: DENY のため空白になる。
-const HOME = "https://ja.wikipedia.org/";
+// native 子 webview 描画なので、X-Frame-Options で埋め込みを拒否するサイト
+// （developer.mozilla.org 等）も初期ページにできる。
+const HOME = "https://developer.mozilla.org/";
 
 /** scheme 省略を https 補完し、https 以外は拒否して null を返す。 */
 function normalize(raw: string): string | null {
@@ -82,8 +82,16 @@ function openTab(initialUrl: string = HOME) {
           }),
           ui.button({ label: "＋", variant: "ghost", onClick: () => openTab() }),
         ]),
-        // key に gen と url を含める → 「再読込」や URL 変更で iframe が remount される
-        ui.webview({ url: tab.url, grow: true, key: `wv:${tab.gen}:${tab.url}` }),
+        // native: ネイティブ子 webview をタブに重ねて描画する（ADR-0076）。
+        // トップレベル文書なので X-Frame-Options / frame-ancestors を受けず、
+        // google.com / MDN などの埋め込み拒否サイトもタブ内に表示できる。
+        // key に gen と url を含める → 「再読込」や URL 変更で作り直す。
+        ui.webview({
+          url: tab.url,
+          grow: true,
+          native: true,
+          key: `wv:${tab.gen}:${tab.url}`,
+        }),
       ]),
   });
   return viewId;

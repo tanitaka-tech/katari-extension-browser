@@ -1,8 +1,10 @@
 # katari-extension-browser
 
 [Katari](https://github.com/tanitaka-tech/Katari) エディタ内に**ブラウザタブ**を開くエディタ拡張。
-URL バー + sandbox 付き iframe（`ui.webview`、Katari ADR-0076）で任意の https ページを
-Dock タブとして表示する。タブは他のビューと同様にドック / フローティング / OS ウィンドウ化できる。
+URL バー + ネイティブ子 webview（`ui.webview({ native: true })`、Katari ADR-0076）で任意の
+https ページを Dock タブとして表示する。ネイティブ webview はトップレベル文書扱いなので、
+`X-Frame-Options` で埋め込みを拒否する google.com / MDN などもタブ内に表示できる。
+タブは他のビューと同様にドック / フローティング / OS ウィンドウ化できる。
 
 ## インストール
 
@@ -18,29 +20,23 @@ Dock タブとして表示する。タブは他のビューと同様にドック
 - メインメニュー「拡張 → 新しいブラウザタブ...」または `CmdOrCtrl+Alt+B`。
 - URL バーに入力して Enter か「移動」。scheme 省略時は `https://` を補完する（http は不可）。
 - 「再読込」でページを読み直し、「＋」で新しいブラウザタブを開く。
-- 「別ウィンドウで開く」で、現在の URL を**別 OS ウィンドウ（ネイティブ webview）**として開く。
-  埋め込みを拒否するサイト（google.com / developer.mozilla.org 等）はタブ内 iframe では
-  空白になるが、このボタンなら**トップレベルで開くため表示できる**。
+- 「別ウィンドウで開く」で、現在の URL を**別 OS ウィンドウ**としても開ける（tear-out 時や
+  ネイティブ webview を使いたくない場合のフォールバック）。
 
 ## 権限
 
-`webview:*` — 任意の https サイトをエディタ内に**埋め込み表示**する権限。加えて、
-「別ウィンドウで開く」（`katari.window.openExternal`）による別 OS ウィンドウでの表示も
-この権限で許可される。いずれの場合も拡張がページの内容を読んだり、ページがエディタ本体へ
-到達したりすることはできない（sandbox iframe / IPC 非注入のネイティブウィンドウ）。
-ネットワーク fetch（`net:`）権限は持たない。
+`webview:*` — 任意の https サイトをエディタ内に表示する権限（タブ内ネイティブ webview /
+別 OS ウィンドウの両方）。拡張がページの内容を読んだり、ページがエディタ本体へ到達したり
+することはできない（ネイティブ webview は Tauri IPC 非注入）。fetch（`net:`）権限は持たない。
 
-## 制限（cross-origin iframe に由来）
+## 制限
 
-- URL バーはページ内リンクでの遷移に**追従しない**（iframe の現在 URL は観測不能）。
-- 戻る / 進むボタンは無い（iframe の履歴に触れない）。
-- `X-Frame-Options` / `frame-ancestors` で埋め込みを拒否するサイト
-  （google.com、developer.mozilla.org など）はタブ内 iframe では**空白表示**になる
-  （拒否を検知できない）。その場合は「別ウィンドウで開く」を使う（別 OS ウィンドウの
-  ネイティブ webview はトップレベルで開くため、これらの制限を受けない）。
-  初期ページには埋め込み可能な ja.wikipedia.org を使っている。
-- `target="_blank"` のリンクは開かない（popups を sandbox で拒否している）。
-- iframe にフォーカスがある間はエディタのキーバインドが届かない。
+- URL バーはページ内リンクでの遷移に**追従しない**（現在 URL は観測不能）。戻る / 進むも無い。
+- タブ内ネイティブ webview は **main ウィンドウのタブ内でのみ**表示できる。OS ウィンドウへ
+  切り離す（tear-out）と iframe にフォールバックし、そこでは `X-Frame-Options` 拒否サイト
+  （google.com / MDN 等）は空白になる。その場合は「別ウィンドウで開く」を使う。
+- ネイティブ webview は最前面に描くため、ダイアログ / メニュー表示中は自動で隠れる。
+  トースト等が隠れることがある。
 
 ## 開発
 

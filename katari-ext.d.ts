@@ -88,7 +88,19 @@ declare module "@katari/ext" {
      * いっぱいに広がる。`key` を変えると remount ＝再読込になる。
      * ページ内遷移の URL 観測や戻る / 進むはできない（cross-origin のため）。
      */
-    webview(props: { url: string; height?: number; grow?: boolean; key?: string }): UiNode;
+    webview(props: {
+      url: string;
+      height?: number;
+      grow?: boolean;
+      key?: string;
+      /**
+       * iframe ではなくネイティブ子 webview をタブに重ねて描画する。トップレベル
+       * 文書扱いなので `X-Frame-Options` / `frame-ancestors` を受けず、埋め込み拒否
+       * サイトも表示できる。main ウィンドウのタブ内でのみ有効（OS ウィンドウへ
+       * 切り離すと iframe にフォールバックする）。
+       */
+      native?: boolean;
+    }): UiNode;
   }
 
   export interface Katari {
