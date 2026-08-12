@@ -160,8 +160,23 @@ declare module "@katari/ext" {
         width?: number;
         height?: number;
         render: () => UiNode;
+        /**
+         * 復元用の安定 id（セッション跨ぎ）。指定するとこのビューは Dock 位置ごと
+         * 永続化され、次回起動時に `onRestore` 経由で復元される（ADR-0076 追補）。
+         */
+        restoreId?: string;
+        /** 復元用の小さな状態（URL 等の JSON。4KB まで）。`onRestore` に渡る。 */
+        state?: unknown;
       }): string;
       close(viewId: string): void;
+      /** ビューの復元用状態を更新する（URL 遷移時などに呼ぶ）。次回起動時に復元される。 */
+      setState(viewId: string, state: unknown): void;
+      /**
+       * 起動時、前回開いていた復元可能ビューごとに呼ばれる。ハンドラ内で
+       * `window.open({ restoreId, state, render })` を呼んで同じビューを復元する。
+       * `onStartup` activation を宣言した拡張で有効。
+       */
+      onRestore(handler: (restoreId: string, state: unknown) => void): void;
       /**
        * 任意の https ページを別 OS ウィンドウ（ネイティブ webview）で開く。
        * iframe 埋め込みを拒否するサイト（`X-Frame-Options` / `frame-ancestors`）も

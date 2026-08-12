@@ -1,9 +1,9 @@
 /**
  * エディタ内ブラウザタブ拡張。
  *
- * `ui.webview`（sandbox 付き cross-origin iframe、Katari ADR-0076）で任意の
- * https ページを Dock タブに表示する。cross-origin のため、ページ内遷移の URL
- * 観測や戻る / 進む制御はできない（README の制限を参照）。
+ * `ui.webview({ native: true })`（ネイティブ子 webview、Katari ADR-0076）で任意の
+ * https ページを Dock タブに表示する。X-Frame-Options 拒否サイトも表示できる。
+ * タブは Dock 位置 + URL ごと永続化され、再起動後に復元される（`restoreId` + `onRestore`）。
  */
 import { katari, ui } from "@katari/ext";
 
@@ -20,6 +20,12 @@ type Tab = {
 // （developer.mozilla.org 等）も初期ページにできる。
 const HOME = "https://developer.mozilla.org/";
 
+/** 復元用の安定 id を採番する（タブごとに一意）。 */
+let restoreSeq = 0;
+function newRestoreId(): string {
+  return `tab-${Date.now().toString(36)}-${restoreSeq++}`;
+}
+
 /** scheme 省略を https 補完し、https 以外は拒否して null を返す。 */
 function normalize(raw: string): string | null {
   const s = raw.trim();
@@ -33,8 +39,9 @@ function normalize(raw: string): string | null {
   }
 }
 
-function openTab(initialUrl: string = HOME) {
+function openTab(initialUrl: string = HOME, restoreId: string = newRestoreId()) {
   const tab: Tab = { input: initialUrl, url: initialUrl, gen: 0 };
+  let viewId = "";
 
   const navigate = (raw: string) => {
     const url = normalize(raw);
@@ -46,12 +53,16 @@ function openTab(initialUrl: string = HOME) {
     if (url === tab.url) tab.gen++;
     tab.url = url;
     tab.input = url;
+    // 表示中の URL を永続化する（再起動後にこの URL で復元される）。
+    if (viewId) katari.window.setState(viewId, { url });
   };
 
-  const viewId = katari.window.open({
+  viewId = katari.window.open({
     title: "Browser",
     width: 900,
     height: 640,
+    restoreId,
+    state: { url: initialUrl },
     render: () =>
       ui.column([
         ui.row([
@@ -99,4 +110,13 @@ function openTab(initialUrl: string = HOME) {
 
 katari.commands.register("open", () => {
   openTab();
+});
+
+// 再起動時、前回開いていたブラウザタブを同じ URL で復元する（Dock 位置は本体が保持）。
+katari.window.onRestore((restoreId, state) => {
+  const url =
+    state && typeof state === "object" && typeof (state as { url?: unknown }).url === "string"
+      ? (state as { url: string }).url
+      : HOME;
+  openTab(url, restoreId);
 });

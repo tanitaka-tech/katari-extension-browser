@@ -8,7 +8,7 @@ description:
 version: 1.0.0
 api_version: 1
 main: main.ts
-activation: ["onCommand"]
+activation: ["onCommand", "onStartup"]
 permissions: ["webview:*"]
 
 contributes:
