@@ -1,0 +1,26 @@
+id: com.tanitaka.browser
+name:
+  ja: "ブラウザ"
+  en: "Browser"
+description:
+  ja: "エディタ内にブラウザタブを開く拡張"
+  en: "Opens browser tabs inside the Katari editor"
+version: 1.0.0
+api_version: 1
+main: main.ts
+activation: ["onCommand"]
+permissions: ["webview:*"]
+
+contributes:
+  commands:
+    - id: open
+      title:
+        ja: "新しいブラウザタブ..."
+        en: "New Browser Tab..."
+  menus:
+    - location: "main/extensions"
+      command: open
+      order: 20
+  keybindings:
+    - command: open
+      key: "CmdOrCtrl+Alt+B"

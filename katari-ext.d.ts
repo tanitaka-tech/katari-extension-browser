@@ -1,0 +1,180 @@
+/**
+ * 拡張 API の型定義（[ADR-0061](../../docs/adr/0061-editor-extension-system.md)）。
+ *
+ * 拡張のソースツリーにこのファイルをコピーするか、`tsconfig.json` の `paths` で
+ * `@katari/ext` をここに向けると補完が効く。実体は Worker ランタイム
+ * （`src/lib/ext/worker/runtime.ts`）が `globalThis.__katari__` に入れる。
+ *
+ * すべての API は非同期（Promise）。同期版は存在しない。
+ */
+
+declare module "@katari/ext" {
+  /** UI ツリーのノード。`ui.*` ビルダの戻り値。 */
+  export type UiNode = Record<string, unknown>;
+
+  export type ToastKind = "info" | "success" | "warning" | "error";
+
+  /** 宣言 UI のビルダ。ハンドラには関数をそのまま渡せる。 */
+  export interface Ui {
+    column(children: UiNode[], props?: Record<string, unknown>): UiNode;
+    row(children: UiNode[], props?: Record<string, unknown>): UiNode;
+    group(children: UiNode[], props?: Record<string, unknown>): UiNode;
+    collapsible(
+      title: string,
+      children: UiNode[],
+      props?: Record<string, unknown>,
+    ): UiNode;
+    text(value: string, props?: { muted?: boolean; bold?: boolean; key?: string }): UiNode;
+    heading(value: string): UiNode;
+    separator(): UiNode;
+    button(props: {
+      label: string;
+      variant?: "default" | "primary" | "danger" | "ghost";
+      disabled?: boolean;
+      key?: string;
+      onClick?: () => unknown;
+    }): UiNode;
+    textField(props: {
+      label?: string;
+      value: string;
+      placeholder?: string;
+      multiline?: boolean;
+      disabled?: boolean;
+      key?: string;
+      onChange?: (value: string) => unknown;
+      /** Enter で確定したとき（multiline では発火しない）。 */
+      onSubmit?: (value: string) => unknown;
+    }): UiNode;
+    numberField(props: {
+      label?: string;
+      value: number;
+      min?: number;
+      max?: number;
+      step?: number;
+      disabled?: boolean;
+      key?: string;
+      onChange?: (value: number) => unknown;
+    }): UiNode;
+    checkbox(props: {
+      label?: string;
+      value: boolean;
+      disabled?: boolean;
+      key?: string;
+      onChange?: (value: boolean) => unknown;
+    }): UiNode;
+    select(props: {
+      label?: string;
+      value: string;
+      options: Array<{ value: string; label: string }>;
+      disabled?: boolean;
+      key?: string;
+      onChange?: (value: string) => unknown;
+    }): UiNode;
+    color(props: {
+      label?: string;
+      value: string;
+      disabled?: boolean;
+      key?: string;
+      onChange?: (value: string) => unknown;
+    }): UiNode;
+    list(props: {
+      items: Array<{ id: string; label: string; selected?: boolean }>;
+      key?: string;
+      onSelect?: (id: string) => unknown;
+    }): UiNode;
+    /**
+     * Web ページの埋め込み表示（sandbox 付き iframe）。`webview:<host>` または
+     * `webview:*` 権限が必要で、https のみ。`grow: true` でタブの残り領域
+     * いっぱいに広がる。`key` を変えると remount ＝再読込になる。
+     * ページ内遷移の URL 観測や戻る / 進むはできない（cross-origin のため）。
+     */
+    webview(props: { url: string; height?: number; grow?: boolean; key?: string }): UiNode;
+  }
+
+  export interface Katari {
+    readonly extensionId: string;
+    /** エディタの表示言語（`ja` / `en` / `zh-CN` / `ko`）。 */
+    readonly locale: string;
+
+    commands: {
+      /** manifest の `contributes.commands[].id` と同じ id で登録する。 */
+      register(id: string, handler: () => unknown): void;
+    };
+
+    inspector: {
+      /** manifest の `contributes.inspector[].id` に対応する描画関数。 */
+      section(
+        id: string,
+        render: (context: { selection?: unknown }) => UiNode,
+      ): void;
+    };
+
+    /** operation registry の操作を直接呼ぶ。読み取りは `project:read` が必要。 */
+    ops: {
+      invoke(op: string, args?: Record<string, unknown>): Promise<unknown>;
+      list(): Promise<string[]>;
+    };
+
+    /**
+     * 編集はここを通す。ops 列は 1 トランザクションとして適用され、
+     * undo 1 回でまとめて戻る。`project:write` が必要。
+     */
+    edit(
+      label: string,
+      ops: Array<{ op: string; args?: Record<string, unknown> }>,
+    ): Promise<unknown>;
+
+    project: {
+      listScreens(): Promise<unknown>;
+      getScreen(screenId: string): Promise<unknown>;
+      listScenes(): Promise<unknown>;
+      info(): Promise<unknown>;
+    };
+
+    selection: {
+      get(): Promise<unknown>;
+    };
+
+    ui: Ui & {
+      toast(message: string, kind?: ToastKind): Promise<unknown>;
+      confirm(message: string): Promise<boolean>;
+      prompt(message: string, defaultValue?: string): Promise<string | null>;
+    };
+
+    /** Dock タブとして開く独自ビュー（ADR-0063 追補）。戻り値の viewId を `close` に渡す。 */
+    window: {
+      open(options: {
+        title?: string;
+        width?: number;
+        height?: number;
+        render: () => UiNode;
+      }): string;
+      close(viewId: string): void;
+    };
+
+    /** エディタ内のモーダル。 */
+    dialog: {
+      open(options: { title?: string; render: () => UiNode }): string;
+      close(viewId: string): void;
+    };
+
+    /** ビューを再描画する。省略時は開いている全ビュー。 */
+    refresh(viewId?: string): void;
+
+    clipboard: {
+      /** `clipboard` 権限が必要。 */
+      writeText(text: string): Promise<unknown>;
+    };
+
+    net: {
+      /** `net:<host>` 権限が必要。https のみ。 */
+      fetchText(url: string): Promise<string>;
+    };
+
+    log(...args: unknown[]): void;
+  }
+
+  export const katari: Katari;
+  export const ui: Ui;
+  export default katari;
+}
