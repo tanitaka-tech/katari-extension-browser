@@ -83,6 +83,35 @@ declare module "@katari/ext" {
       onSelect?: (id: string) => unknown;
     }): UiNode;
     /**
+     * エディタのインスペクタと同じリスト UI。見出しでの折りたたみ・件数表示・
+     * ドラッグ並べ替え・行の `×`・フッタの `＋` / `−` が付いた編集リストで、
+     * お気に入りやプリセットのような「並びに意味がある一覧」に向く。
+     *
+     * 渡さなかったハンドラの操作は自動的に無効化される（`onAdd` 省略 → `＋` は押せない）。
+     * `items[].children` を付けると、その行を選択したときに下へ展開される編集エリアになる。
+     */
+    inspectorList(props: {
+      title: string;
+      items: Array<{
+        id: string;
+        label: string;
+        selected?: boolean;
+        /** 行を開いたときに表示する編集 UI。 */
+        children?: UiNode[];
+      }>;
+      /** 0 件のときに出す文言。 */
+      emptyText?: string;
+      addDisabled?: boolean;
+      removeDisabled?: boolean;
+      reorderDisabled?: boolean;
+      key?: string;
+      /** 行を選択したとき（クリックで開く / 移動する用途）。 */
+      onSelect?: (id: string) => unknown;
+      onAdd?: () => unknown;
+      onRemove?: (e: { id: string | null; index: number }) => unknown;
+      onReorder?: (e: { from: number; to: number; id: string | null }) => unknown;
+    }): UiNode;
+    /**
      * Web ページの埋め込み表示（sandbox 付き iframe）。`webview:<host>` または
      * `webview:*` 権限が必要で、https のみ。`grow: true` でタブの残り領域
      * いっぱいに広がる。`key` を変えると remount ＝再読込になる。
