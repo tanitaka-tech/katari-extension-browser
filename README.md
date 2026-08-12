@@ -30,7 +30,8 @@ Dock タブとして表示する。タブは他のビューと同様にドック
 - URL バーはページ内リンクでの遷移に**追従しない**（iframe の現在 URL は観測不能）。
 - 戻る / 進むボタンは無い（iframe の履歴に触れない）。
 - `X-Frame-Options` / `frame-ancestors` で埋め込みを拒否するサイト
-  （google.com など）は**空白表示**になる（拒否を検知できない）。
+  （google.com、developer.mozilla.org など）は**空白表示**になる（拒否を検知できない）。
+  初期ページには埋め込み可能な ja.wikipedia.org を使っている。
 - `target="_blank"` のリンクは開かない（popups を sandbox で拒否している）。
 - iframe にフォーカスがある間はエディタのキーバインドが届かない。
 

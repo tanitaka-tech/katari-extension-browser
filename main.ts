@@ -16,7 +16,9 @@ type Tab = {
   gen: number;
 };
 
-const HOME = "https://developer.mozilla.org/";
+// 初期ページは埋め込み（iframe）を拒否しないサイトであること。
+// developer.mozilla.org や google.com は X-Frame-Options: DENY のため空白になる。
+const HOME = "https://ja.wikipedia.org/";
 
 /** scheme 省略を https 補完し、https 以外は拒否して null を返す。 */
 function normalize(raw: string): string | null {
@@ -36,12 +38,14 @@ function openTab(initialUrl: string = HOME) {
 
   const navigate = (raw: string) => {
     const url = normalize(raw);
-    if (url) {
-      tab.url = url;
-      tab.input = url;
-    } else {
+    if (!url) {
       void katari.ui.toast("https の URL を入力してください", "warning");
+      return;
     }
+    // 同じ URL への「移動」は再読込として扱う（押しても無反応に見えるのを防ぐ）。
+    if (url === tab.url) tab.gen++;
+    tab.url = url;
+    tab.input = url;
   };
 
   const viewId = katari.window.open({
@@ -69,6 +73,10 @@ function openTab(initialUrl: string = HOME) {
           }),
           ui.button({ label: "＋", variant: "ghost", onClick: () => openTab() }),
         ]),
+        ui.text(
+          "※ 埋め込みを拒否するサイト（google.com / developer.mozilla.org 等）は空白表示になります",
+          { muted: true },
+        ),
         // key に gen と url を含める → 「再読込」や URL 変更で iframe が remount される
         ui.webview({ url: tab.url, grow: true, key: `wv:${tab.gen}:${tab.url}` }),
       ]),
