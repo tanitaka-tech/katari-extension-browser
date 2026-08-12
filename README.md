@@ -18,19 +18,26 @@ Dock タブとして表示する。タブは他のビューと同様にドック
 - メインメニュー「拡張 → 新しいブラウザタブ...」または `CmdOrCtrl+Alt+B`。
 - URL バーに入力して Enter か「移動」。scheme 省略時は `https://` を補完する（http は不可）。
 - 「再読込」でページを読み直し、「＋」で新しいブラウザタブを開く。
+- 「別ウィンドウで開く」で、現在の URL を**別 OS ウィンドウ（ネイティブ webview）**として開く。
+  埋め込みを拒否するサイト（google.com / developer.mozilla.org 等）はタブ内 iframe では
+  空白になるが、このボタンなら**トップレベルで開くため表示できる**。
 
 ## 権限
 
-`webview:*` — 任意の https サイトをエディタ内に**埋め込み表示**する権限。
-拡張がページの内容を読んだり、ページがエディタ本体へ到達したりすることはできない
-（sandbox iframe + cross-origin）。ネットワーク fetch（`net:`）権限は持たない。
+`webview:*` — 任意の https サイトをエディタ内に**埋め込み表示**する権限。加えて、
+「別ウィンドウで開く」（`katari.window.openExternal`）による別 OS ウィンドウでの表示も
+この権限で許可される。いずれの場合も拡張がページの内容を読んだり、ページがエディタ本体へ
+到達したりすることはできない（sandbox iframe / IPC 非注入のネイティブウィンドウ）。
+ネットワーク fetch（`net:`）権限は持たない。
 
 ## 制限（cross-origin iframe に由来）
 
 - URL バーはページ内リンクでの遷移に**追従しない**（iframe の現在 URL は観測不能）。
 - 戻る / 進むボタンは無い（iframe の履歴に触れない）。
 - `X-Frame-Options` / `frame-ancestors` で埋め込みを拒否するサイト
-  （google.com、developer.mozilla.org など）は**空白表示**になる（拒否を検知できない）。
+  （google.com、developer.mozilla.org など）はタブ内 iframe では**空白表示**になる
+  （拒否を検知できない）。その場合は「別ウィンドウで開く」を使う（別 OS ウィンドウの
+  ネイティブ webview はトップレベルで開くため、これらの制限を受けない）。
   初期ページには埋め込み可能な ja.wikipedia.org を使っている。
 - `target="_blank"` のリンクは開かない（popups を sandbox で拒否している）。
 - iframe にフォーカスがある間はエディタのキーバインドが届かない。

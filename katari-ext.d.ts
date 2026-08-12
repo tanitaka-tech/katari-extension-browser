@@ -150,6 +150,12 @@ declare module "@katari/ext" {
         render: () => UiNode;
       }): string;
       close(viewId: string): void;
+      /**
+       * 任意の https ページを別 OS ウィンドウ（ネイティブ webview）で開く。
+       * iframe 埋め込みを拒否するサイト（`X-Frame-Options` / `frame-ancestors`）も
+       * トップレベルで開くため表示できる。`webview:<host>` / `webview:*` 権限が必要。
+       */
+      openExternal(url: string, title?: string): Promise<void>;
     };
 
     /** エディタ内のモーダル。 */

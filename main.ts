@@ -71,12 +71,17 @@ function openTab(initialUrl: string = HOME) {
               tab.gen++;
             },
           }),
+          // 埋め込みを拒否するサイト（google.com / MDN 等）は iframe では空白になる。
+          // その場合はこのボタンで別 OS ウィンドウ（ネイティブ webview）を開けば表示できる。
+          ui.button({
+            label: "別ウィンドウで開く",
+            onClick: () => {
+              const url = normalize(tab.input) ?? tab.url;
+              void katari.window.openExternal(url);
+            },
+          }),
           ui.button({ label: "＋", variant: "ghost", onClick: () => openTab() }),
         ]),
-        ui.text(
-          "※ 埋め込みを拒否するサイト（google.com / developer.mozilla.org 等）は空白表示になります",
-          { muted: true },
-        ),
         // key に gen と url を含める → 「再読込」や URL 変更で iframe が remount される
         ui.webview({ url: tab.url, grow: true, key: `wv:${tab.gen}:${tab.url}` }),
       ]),
