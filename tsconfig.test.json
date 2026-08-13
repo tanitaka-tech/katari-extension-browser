@@ -1,0 +1,16 @@
+{
+  "//": "テストキット・テスト・vitest 設定の型検査。こちらは Node で走るので node の型と DOM 由来のグローバル（setTimeout）が要る。配布物の型検査は tsconfig.json。",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "lib": ["ES2022", "WebWorker"]
+  },
+  "include": [
+    "katari-ext.d.ts",
+    "katari-ops.d.ts",
+    "katari-ext-shim.ts",
+    "katari-ext-test.ts",
+    "main.test.ts",
+    "vitest.config.ts"
+  ]
+}

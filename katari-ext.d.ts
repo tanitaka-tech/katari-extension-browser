@@ -12,7 +12,42 @@ declare module "@katari/ext" {
   /** UI ツリーのノード。`ui.*` ビルダの戻り値。 */
   export type UiNode = Record<string, unknown>;
 
+  /**
+   * op 名から引数の型を引く。生成表（`katari-ops.d.ts`）に無い名前を渡した
+   * ときは緩い形にフォールバックするので、将来増えた op も呼べる。
+   */
+  export type OpArgs<K extends string> = K extends KatariOpName
+    ? KatariOps[K]
+    : Record<string, unknown>;
+
+  /**
+   * `katari.edit()` に渡す 1 操作。既知の op は引数まで検査される。
+   * 生成表に無い op を呼びたいときは `{ op, args } as EditOp` で明示する。
+   */
+  export type EditOp = {
+    [K in KatariOpName]: { op: K; args: KatariOps[K] };
+  }[KatariOpName];
+
   export type ToastKind = "info" | "success" | "warning" | "error";
+
+  /** `katari.events.on()` で購読できるイベントと、そのペイロード。 */
+  export interface ExtensionEventPayload {
+    "project.opened": { path: string };
+    "project.closed": null;
+    "project.saved": { at: number };
+    /** `katari.selection.get()` と同じ形。 */
+    "selection.changed": unknown;
+    "assets.changed": { count: number };
+    "build.started": null;
+    "build.finished": { ok: boolean };
+    "preview.started": null;
+    "preview.stopped": null;
+    "locale.changed": { locale: string };
+    /** 自分の宣言的設定がユーザーに編集された。 */
+    "config.changed": { key: string; scope: "project" | "editor" };
+  }
+
+  export type ExtensionEventName = keyof ExtensionEventPayload;
 
   /** 宣言 UI のビルダ。ハンドラには関数をそのまま渡せる。 */
   export interface Ui {
@@ -137,6 +172,90 @@ declare module "@katari/ext" {
      * いっぱいに広がる。`key` を変えると remount ＝再読込になる。
      * ページ内遷移の URL 観測や戻る / 進むはできない（cross-origin のため）。
      */
+    /** 0..1 の進捗バー。`value` を省略すると不定（処理中）表示になる。 */
+    progress(props?: { label?: string; value?: number; key?: string }): UiNode;
+    slider(props: {
+      label?: string;
+      value: number;
+      min?: number;
+      max?: number;
+      step?: number;
+      disabled?: boolean;
+      key?: string;
+      onChange?: (value: number) => unknown;
+    }): UiNode;
+    /** 小さな状態チップ。 */
+    badge(
+      label: string,
+      props?: {
+        tone?: "neutral" | "info" | "success" | "warning" | "danger";
+        key?: string;
+      },
+    ): UiNode;
+    /**
+     * タブ切り替え。`active` を渡すと拡張が制御し、省略時はエディタが保持する
+     * （`refresh()` してもタブが先頭に戻らない）。
+     */
+    tabs(
+      items: Array<{ id: string; label: string; children: UiNode[] }>,
+      props?: { active?: string; key?: string; onChange?: (id: string) => unknown },
+    ): UiNode;
+    /** 読み取り専用の表。`cells` は `columns` と同じ並びで渡す。 */
+    table(props: {
+      columns: Array<{ key: string; label: string; width?: number }>;
+      rows: Array<{ id: string; cells: string[]; selected?: boolean }>;
+      emptyText?: string;
+      key?: string;
+      onSelect?: (id: string) => unknown;
+    }): UiNode;
+    /**
+     * プロジェクト内アセットの表示。`asset` はアセットのパス。表示 URL は
+     * エディタが解決するので、任意の外部 URL を貼ることはできない
+     * （外部ページを出したいときは `ui.webview()`）。
+     */
+    image(props: {
+      asset: string;
+      width?: number;
+      height?: number;
+      fit?: "contain" | "cover";
+      key?: string;
+    }): UiNode;
+    /**
+     * アセットを選ばせる。**選択肢はエディタが埋める**ので拡張は一覧を用意しない。
+     * `project:read` が無くても使え、ユーザーが選んだ 1 件だけが `onChange` に届く。
+     */
+    assetPicker(props: {
+      label?: string;
+      value: string;
+      /** `image` / `sound` / `film` / `font` / `model` / `environment` / `other`。省略で全部。 */
+      kind?: string;
+      placeholder?: string;
+      disabled?: boolean;
+      key?: string;
+      /** 選ばれたアセットのパス。 */
+      onChange?: (assetPath: string) => unknown;
+    }): UiNode;
+    /** 画面を選ばせる（選択肢はエディタが埋める）。 */
+    screenPicker(props: {
+      label?: string;
+      value: string;
+      placeholder?: string;
+      disabled?: boolean;
+      key?: string;
+      /** 選ばれた screen id。 */
+      onChange?: (screenId: string) => unknown;
+    }): UiNode;
+    /** 画面変数を選ばせる。`screenId` 省略時は現在選択中の画面。 */
+    variablePicker(props: {
+      label?: string;
+      value: string;
+      screenId?: string;
+      placeholder?: string;
+      disabled?: boolean;
+      key?: string;
+      /** 選ばれた変数名。 */
+      onChange?: (name: string) => unknown;
+    }): UiNode;
     webview(props: {
       url: string;
       height?: number;
@@ -169,6 +288,14 @@ declare module "@katari/ext" {
     /** エディタの表示言語（`ja` / `en` / `zh-CN` / `ko`）。 */
     readonly locale: string;
 
+    /**
+     * 拡張自身の文言を引く。`l10n/<locale>.toon` に
+     * `greeting: "こんにちは {name}"` のように書いておくと、
+     * `katari.t("greeting", { name: "A" })` で現在の言語の文言が返る。
+     * 見つからなければ en → キーそのもの、の順にフォールバックする。
+     */
+    t(key: string, params?: Record<string, string | number>): string;
+
     commands: {
       /** manifest の `contributes.commands[].id` と同じ id で登録する。 */
       register(id: string, handler: () => unknown): void;
@@ -194,6 +321,27 @@ declare module "@katari/ext" {
     };
 
     /**
+     * manifest の `contributes.configuration` で宣言した設定。**フォームは
+     * エディタが描く**ので、拡張は値を読むだけでよい（設定 UI のコードが要らない）。
+     * `type: secret` の項目は OS の資格情報ストアに入り、設定ファイルには残らない。
+     */
+    config: {
+      get(
+        key: string,
+        options?: { scope?: "project" | "editor"; secret?: boolean },
+      ): Promise<unknown>;
+      set(
+        key: string,
+        value: unknown,
+        options?: { scope?: "project" | "editor"; secret?: boolean },
+      ): Promise<unknown>;
+      /** ユーザーが設定を編集したときに呼ばれる。戻り値を呼ぶと解除。 */
+      onChange(
+        handler: (payload: { key: string; scope: "project" | "editor" }) => unknown,
+      ): () => void;
+    };
+
+    /**
      * 拡張ごとの永続ストレージ。`editor` はプロジェクト非依存のグローバル、
      * `project` は現在のプロジェクトに紐づく。値は JSON 直列化可能なもの。
      * 拡張ごとに隔離されており専用権限は不要。
@@ -203,9 +351,14 @@ declare module "@katari/ext" {
       project: ExtStorageScope;
     };
 
-    /** operation registry の操作を直接呼ぶ。読み取りは `project:read` が必要。 */
+    /**
+     * operation registry の操作を直接呼ぶ。読み取りは `project:read` が必要。
+     *
+     * op 名と引数は `katari-ops.d.ts`（Rust のツールスキーマから自動生成）で
+     * 型付けされているので補完が効く。生成表に無い op も文字列で呼べる。
+     */
     ops: {
-      invoke(op: string, args?: Record<string, unknown>): Promise<unknown>;
+      invoke<K extends string>(op: K, args?: OpArgs<K>): Promise<unknown>;
       list(): Promise<string[]>;
     };
 
@@ -213,10 +366,7 @@ declare module "@katari/ext" {
      * 編集はここを通す。ops 列は 1 トランザクションとして適用され、
      * undo 1 回でまとめて戻る。`project:write` が必要。
      */
-    edit(
-      label: string,
-      ops: Array<{ op: string; args?: Record<string, unknown> }>,
-    ): Promise<unknown>;
+    edit(label: string, ops: EditOp[]): Promise<unknown>;
 
     project: {
       listScreens(): Promise<unknown>;
@@ -286,6 +436,65 @@ declare module "@katari/ext" {
     /** ビューを再描画する。省略時は開いている全ビュー。 */
     refresh(viewId?: string): void;
 
+    /**
+     * エディタ側の変化を購読する。戻り値を呼ぶと解除できる。
+     * `locale.changed` 以外は `project:read` が必要。イベントだけで動く拡張は
+     * manifest の `activation` に `onEvent` を宣言する（起動時に立ち上がる）。
+     */
+    events: {
+      on<K extends ExtensionEventName>(
+        name: K,
+        handler: (payload: ExtensionEventPayload[K]) => unknown,
+      ): () => void;
+    };
+
+    /**
+     * 任意権限（manifest の `optional_permissions`）。承認時ではなく**使う直前に**
+     * ユーザーへ尋ねられる。ユーザーはいつでも管理ウィンドウから取り消せるので、
+     * 使う前に毎回 `has()` か `request()` で確認すること。
+     */
+    permissions: {
+      has(permission: string): Promise<boolean>;
+      /** 許可されたら true。必須側や未宣言の権限を渡すと例外。 */
+      request(permission: string): Promise<boolean>;
+    };
+
+    /**
+     * 本体の「問題」パネルへ出す診断。呼ぶたびに**その拡張の分を全置換**するので、
+     * 消したいときは空配列を渡す。`project:read` が必要。
+     * `target` を付けるとクリックでその場所へ飛べる。
+     */
+    diagnostics: {
+      set(
+        items: Array<{
+          message: string;
+          severity?: "error" | "warning";
+          resource?: string;
+          detail?: string;
+          target?:
+            | { kind: "scene"; sceneName: string; line?: number }
+            | { kind: "screen"; screenId: string };
+        }>,
+      ): Promise<unknown>;
+    };
+
+    /**
+     * ステータスバーに出す小さな項目（同期状態・カウンタなど、常時見えていて
+     * ほしい情報）。1 拡張あたり 3 件まで。
+     */
+    status: {
+      set(item: {
+        id: string;
+        text: string;
+        tooltip?: string;
+        tone?: "neutral" | "info" | "success" | "warning" | "danger";
+        /** 押したときに実行する自分のコマンド id。 */
+        command?: string;
+        order?: number;
+      }): Promise<unknown>;
+      clear(id: string): Promise<unknown>;
+    };
+
     clipboard: {
       /** `clipboard` 権限が必要。 */
       writeText(text: string): Promise<unknown>;
@@ -294,6 +503,54 @@ declare module "@katari/ext" {
     net: {
       /** `net:<host>` 権限が必要。https のみ。 */
       fetchText(url: string): Promise<string>;
+      /**
+       * method / headers / body を指定できる版。`net:<host>` 権限が必要で https のみ。
+       * リクエストはエディタ webview ではなくネイティブ側から出るため、CORS の
+       * 影響を受けず、エディタの Cookie とも混ざらない。応答は 8MB まで。
+       */
+      fetch(options: {
+        url: string;
+        method?: string;
+        headers?: Record<string, string>;
+        body?: string;
+        /** `text`（既定）は `text`、`bytes` は `base64` に入って返る。 */
+        responseType?: "text" | "bytes";
+      }): Promise<{
+        status: number;
+        ok: boolean;
+        headers: Record<string, string>;
+        text: string | null;
+        base64: string | null;
+      }>;
+    };
+
+    /**
+     * ユーザーが選んだ 1 ファイルだけを読み書きする。**権限は不要**な代わりに
+     * 毎回 OS のダイアログを経由し、パスを覚えて後から読み直すことはできない。
+     * インポータ / エクスポータ（CSV・JSON・他ツールからの移行）はこれで書く。
+     */
+    fs: {
+      /** 「開く」ダイアログ → 選ばれた 1 ファイルの中身。キャンセルは null。 */
+      openFile(options?: {
+        /** 拡張子で絞る（`["csv", "json"]`）。 */
+        accept?: string[];
+        /** `utf8`（既定）は `text`、`base64` は `base64` に入って返る。 */
+        encoding?: "utf8" | "base64";
+        title?: string;
+      }): Promise<{
+        path: string;
+        name: string;
+        text?: string;
+        base64?: string;
+      } | null>;
+      /** 「保存」ダイアログ → 書き出し。キャンセルは null。 */
+      saveFile(options: {
+        data: string;
+        suggestedName?: string;
+        accept?: string[];
+        encoding?: "utf8" | "base64";
+        title?: string;
+      }): Promise<{ path: string } | null>;
     };
 
     log(...args: unknown[]): void;

@@ -5,11 +5,24 @@ name:
 description:
   ja: "エディタ内にブラウザタブを開く拡張"
   en: "Opens browser tabs inside the Katari editor"
-version: 1.0.0
+version: 1.1.0
 api_version: 1
 main: main.ts
 activation: ["onCommand", "onStartup"]
-permissions: ["webview:*"]
+
+# 配布メタデータ（ADR-0084）。管理ウィンドウの一覧と詳細ペインに出る。
+publisher: "tanitaka-tech"
+homepage: "https://github.com/tanitaka-tech/katari-extension-browser"
+license: "MIT"
+categories: ["web", "productivity"]
+icon: "🌐"
+# ui.webview({ native: true }) / popover の子 webview 描画を前提にしている。
+min_app_version: "0.2.0"
+
+# 必須権限は無し。任意の https を表示する webview:* は承認時に一括で与えるには広すぎるので、
+# 最初のタブを開く直前に katari.permissions.request() で尋ねる（ADR-0084）。
+permissions: []
+optional_permissions: ["webview:*"]
 
 contributes:
   commands:
@@ -24,6 +37,48 @@ contributes:
   keybindings:
     - command: open
       key: "CmdOrCtrl+Alt+B"
+
+  # スカラ設定はフォームをエディタに描かせる（拡張コードを動かさずに編集できる）。
+  configuration:
+    - key: homeUrl
+      type: string
+      scope: editor
+      order: 10
+      title:
+        ja: "ホーム URL"
+        en: "Home URL"
+      description:
+        ja: "「新しいブラウザタブ...」と「＋」で開く初期ページ。https のみ。"
+        en: "Initial page for “New Browser Tab...” and “＋”. https only."
+      default: "https://developer.mozilla.org/"
+      placeholder: "https://…"
+    - key: historyMax
+      type: number
+      scope: editor
+      order: 20
+      title:
+        ja: "履歴の保持件数"
+        en: "History entries kept"
+      description:
+        ja: "ブラウザタブ 1 つあたりに残す訪問履歴の上限。0 で履歴を取らない。"
+        en: "Maximum visits kept per browser tab. 0 disables history."
+      default: 20
+      min: 0
+      max: 100
+    - key: showStatus
+      type: boolean
+      scope: editor
+      order: 30
+      title:
+        ja: "ステータスバーにタブ数を出す"
+        en: "Show tab count in the status bar"
+      description:
+        ja: "開いているブラウザタブの数をステータスバーに常駐させる。クリックで新しいタブを開く。"
+        en: "Keeps the number of open browser tabs in the status bar. Click to open a new tab."
+      default: true
+
+  # 順序付きリストは configuration では宣言できない（型はスカラのみ）ため、
+  # お気に入りは従来どおり設定タブ + ui.inspectorList + katari.storage で扱う。
   settings:
     - id: favEditor
       scope: editor

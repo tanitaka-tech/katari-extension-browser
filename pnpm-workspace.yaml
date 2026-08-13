@@ -1,0 +1,3 @@
+# vitest -> vite -> esbuild。esbuild はバイナリを配置する postinstall が要るので許可する。
+allowBuilds:
+  esbuild: true

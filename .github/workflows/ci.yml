@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # 配布物（main.ts）とテスト側を別々に型検査する。
+      # 前者は Katari が Worker で読む構成そのままなので、DOM の型には頼れない。
+      - run: pnpm run typecheck
+
+      # エディタを起動せずに拡張のロジックを検証する（Katari ADR-0084 のテストキット）。
+      - run: pnpm run test
+
+      # manifest.toon が壊れていないことの最低限の確認。
+      # 本体の完全なパーサは Katari 側にしかないので、ここでは必須キーの存在だけを見る。
+      - name: manifest.toon sanity
+        run: |
+          for key in id: name: version: api_version: main: publisher: license: homepage: categories: icon: min_app_version: optional_permissions:; do
+            grep -q "^$key" manifest.toon || { echo "manifest.toon: missing $key"; exit 1; }
+          done
+          test -f README.md || { echo "README.md is required (shown in the extension manager)"; exit 1; }
+          test -f l10n/ja.toon && test -f l10n/en.toon
