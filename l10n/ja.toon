@@ -1,0 +1,36 @@
+# 拡張自身の文言（Katari ADR-0084）。`katari.t("キー", { 埋め込み })` で引く。
+# 現在の言語 → en → キーそのもの、の順にフォールバックする。
+# キーは en.toon と 1 対 1 で対応させること（main.test.ts が検査する）。
+
+urlInvalid: "https の URL を入力してください"
+urlDuplicate: "同じ URL が既にあります"
+
+favScopeEditor: "エディタお気に入り"
+favScopeProject: "プロジェクトお気に入り"
+favPanelHeadingEditor: "お気に入り URL（エディタ共通）"
+favPanelHeadingProject: "お気に入り URL（このプロジェクト）"
+favPanelHintEditor: "すべてのプロジェクトで共有されます。＋ で追加し、行をクリックして名前と URL を編集します。"
+favPanelHintProject: "現在のプロジェクトにのみ保存されます（project-settings に含まれます）。＋ で追加し、行をクリックして名前と URL を編集します。"
+favPanelEmpty: "まだ登録がありません。＋ で追加できます。"
+favMenuEmpty: "★ のトグルで現在のページを追加できます"
+
+fieldName: "名前"
+fieldUrl: "URL"
+namePlaceholder: "未設定なら URL を表示"
+urlPlaceholder: "https://…"
+save: "保存"
+open: "開く"
+
+historyTitle: "履歴（新しい順）"
+historyEmpty: "まだ移動していません"
+historyClear: "履歴を消去"
+historyCount: "{count} 件（最大 {max}）"
+historyOff: "履歴は「履歴の保持件数」の設定で切られています"
+
+statusText: "お気に入り {count}"
+statusTooltip: "登録済みのお気に入り件数。クリックで新しいブラウザタブを開く。"
+
+permHeading: "ページを表示する許可が必要です"
+permBody: "任意の https ページをタブ内に表示するため、この拡張は webview:* 権限を使います。承認時ではなく、実際に表示する直前にここで尋ねます。許可は拡張の管理ウィンドウからいつでも取り消せます。"
+permGrant: "許可する"
+permDenied: "許可されませんでした。「{label}」を押すと求め直せます。"

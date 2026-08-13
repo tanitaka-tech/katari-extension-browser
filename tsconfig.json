@@ -1,11 +1,17 @@
 {
+  "//": "配布する拡張本体の型検査。Katari の examples/extensions/tsconfig.json がベース。lib に WebWorker を足しているのは、拡張が Worker で動き main.ts が URL を使うため（DOM ではない）。テスト側は tsconfig.test.json。",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": [],
+    "lib": ["ES2022", "WebWorker"],
+    "paths": {
+      "@katari/ext": ["./katari-ext.d.ts"]
+    }
   },
-  "include": ["main.ts", "katari-ext.d.ts"]
+  "include": ["katari-ext.d.ts", "katari-ops.d.ts", "main.ts"]
 }

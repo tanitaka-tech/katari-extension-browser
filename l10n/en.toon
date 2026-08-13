@@ -1,0 +1,36 @@
+# Extension-owned strings (Katari ADR-0084). Read them with `katari.t("key", { params })`.
+# Lookup order is current locale -> en -> the key itself, so this file is the last
+# stop before a raw key leaks into the UI: it must define every key ja.toon does.
+
+urlInvalid: "Enter an https URL"
+urlDuplicate: "That URL is already in the list"
+
+favScopeEditor: "Editor favorites"
+favScopeProject: "Project favorites"
+favPanelHeadingEditor: "Favorite URLs (all projects)"
+favPanelHeadingProject: "Favorite URLs (this project)"
+favPanelHintEditor: "Shared across every project. Add with ＋, then click a row to edit its name and URL."
+favPanelHintProject: "Stored with the current project (part of project-settings). Add with ＋, then click a row to edit its name and URL."
+favPanelEmpty: "Nothing saved yet. Add one with ＋."
+favMenuEmpty: "Use the ★ toggle to save the current page"
+
+fieldName: "Name"
+fieldUrl: "URL"
+namePlaceholder: "Falls back to the URL when empty"
+urlPlaceholder: "https://…"
+save: "Save"
+open: "Open"
+
+historyTitle: "History (newest first)"
+historyEmpty: "No navigation yet"
+historyClear: "Clear history"
+historyCount: "{count} of {max}"
+historyOff: "History is turned off by the “History entries kept” setting"
+
+statusText: "Favorites {count}"
+statusTooltip: "Saved favorites. Click to open a new browser tab."
+
+permHeading: "Permission needed to show the page"
+permBody: "Showing arbitrary https pages inside a tab needs the webview:* permission. It is not granted at approval time — you are asked here, right before the page is shown. You can revoke it at any time from the extension manager."
+permGrant: "Allow"
+permDenied: "Not allowed. Press “{label}” to ask again."

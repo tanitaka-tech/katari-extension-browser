@@ -9,6 +9,13 @@
  * インスペクタと同じリスト UI（`ui.inspectorList`）なので、その場で並べ替え・削除できる。
  * お気に入りは「エディタ設定 / プロジェクト設定」の拡張タブでも編集できる
  * （`katari.settings` + `katari.storage`）。
+ *
+ * ADR-0084 で入った API の使いどころ:
+ * - `katari.permissions`  `webview:*` は承認時に取らず、最初に表示する直前に尋ねる
+ * - `katari.config`       ホーム URL / 履歴件数 / ステータス表示は manifest で宣言し、
+ *                         フォームはエディタに描かせる（拡張コードは値を読むだけ）
+ * - `katari.t`            文言は `l10n/<locale>.toon`（`katari.locale` の自前分岐はしない）
+ * - `katari.status`       お気に入り件数をステータスバーに常駐させる
  */
 import { katari, ui } from "@katari/ext";
 
@@ -26,23 +33,97 @@ type Tab = {
   history: Entry[];
 };
 
-// native 子 webview 描画なので、X-Frame-Options で埋め込みを拒否するサイトも初期ページにできる。
-const HOME = "https://developer.mozilla.org/";
+/**
+ * 任意の https ページを表示するための権限。**必須ではなく任意権限**として宣言してあり
+ * （ADR-0084）、承認時には与えられない。ユーザーはいつでも取り消せるので、
+ * 表示する直前に毎回 `has()` / `request()` で引き直す。
+ */
+const WEBVIEW_PERMISSION = "webview:*";
 
-/** タブ状態に保存する履歴の最大件数。 */
-const HISTORY_MAX = 20;
 /**
  * タブ状態（`window.setState`）の JSON 予算。本体は 4KB を超えた state を**丸ごと捨てる**ので、
  * URL まで失わないよう手前で履歴を削る。
  */
 const STATE_BUDGET = 3000;
 
+/** 設定タブの `＋` で追加する既定 URL（追加後に行を開いて編集する前提）。 */
+const NEW_FAVORITE_BASE = "https://example.com/";
+
+// ------------------------------------------------------------------ 宣言的設定
+
+/**
+ * `contributes.configuration` で宣言した設定の既定値。
+ *
+ * 保存値が無い / 壊れているときはここへ落とす。エディタ側も宣言に照らして正規化するが、
+ * 拡張は「値を読むだけ」なので自分でも最後の砦を持っておく。
+ */
+const CONFIG_DEFAULTS = {
+  homeUrl: "https://developer.mozilla.org/",
+  historyMax: 20,
+  showStatus: true,
+} as const;
+
+/** 履歴件数の許容範囲（manifest の min / max と揃える）。 */
+const HISTORY_MAX_LIMIT = 100;
+
+const config = { ...CONFIG_DEFAULTS } as {
+  homeUrl: string;
+  historyMax: number;
+  showStatus: boolean;
+};
+
+async function loadConfig(): Promise<void> {
+  const home = await katari.config.get("homeUrl");
+  // ホーム URL は表示に使う前に https へ正規化する（設定ファイルを手で書かれても壊れない）。
+  config.homeUrl =
+    (typeof home === "string" ? normalize(home) : null) ?? CONFIG_DEFAULTS.homeUrl;
+
+  const max = await katari.config.get("historyMax");
+  config.historyMax =
+    typeof max === "number" && Number.isFinite(max)
+      ? Math.min(HISTORY_MAX_LIMIT, Math.max(0, Math.floor(max)))
+      : CONFIG_DEFAULTS.historyMax;
+
+  const show = await katari.config.get("showStatus");
+  config.showStatus = typeof show === "boolean" ? show : CONFIG_DEFAULTS.showStatus;
+}
+
+// -------------------------------------------------------------------- 任意権限
+
+/**
+ * 直近に確認した `webview:*` の実効状態。`render()` は同期なのでここに載せ、
+ * 取り消しに追従できるようタブを開くとき / 移動するときに引き直す。
+ */
+let webviewGranted = false;
+/** 一度 `request()` して断られたか（ゲート画面の文言を変えるためだけに使う）。 */
+let webviewDenied = false;
+
+/** 実効権限を引き直す（取り消しは即座に効くので毎回確認する）。 */
+async function syncWebviewPermission(): Promise<boolean> {
+  const granted = await katari.permissions.has(WEBVIEW_PERMISSION);
+  if (granted !== webviewGranted) {
+    webviewGranted = granted;
+    katari.refresh();
+  }
+  if (granted) webviewDenied = false;
+  return granted;
+}
+
+/** 表示する直前に許可を求める。既に持っていればダイアログは出ない。 */
+async function ensureWebviewPermission(): Promise<boolean> {
+  if (await syncWebviewPermission()) return true;
+  webviewGranted = await katari.permissions.request(WEBVIEW_PERMISSION);
+  webviewDenied = !webviewGranted;
+  katari.refresh();
+  return webviewGranted;
+}
+
+// ------------------------------------------------------------------ お気に入り
+
 // お気に入り（scope ごと）。onStartup で storage からロードするモジュールキャッシュ。
 const favorites: Record<Scope, Entry[]> = { editor: [], project: [] };
 // 設定パネルで編集中のバッファ（`url:<scope>:<index>` / `title:<scope>:<index>` → 入力値）。
 const editInput: Record<string, string> = {};
-/** 設定タブの `＋` で追加する既定 URL（追加後に行を開いて編集する前提）。 */
-const NEW_FAVORITE_BASE = "https://example.com/";
 
 let restoreSeq = 0;
 function newRestoreId(): string {
@@ -107,17 +188,17 @@ function asEntries(value: unknown): Entry[] {
   return out;
 }
 
-// -------------------------------------------------------------- お気に入り
-
 async function loadFavorites(): Promise<void> {
   favorites.editor = asEntries(await katari.storage.editor.get("favorites"));
   favorites.project = asEntries(await katari.storage.project.get("favorites"));
+  await syncStatus();
   katari.refresh(); // ロード完了後に設定パネル / ブラウザ view を描き直す。
 }
 
 async function saveFavorites(scope: Scope, next: Entry[]): Promise<void> {
   favorites[scope] = next;
   await katari.storage[scope].set("favorites", next);
+  await syncStatus();
   katari.refresh();
 }
 
@@ -128,7 +209,7 @@ function isFavorite(scope: Scope, url: string): boolean {
 async function addFavorite(scope: Scope, raw: string, title?: string): Promise<void> {
   const url = normalize(raw);
   if (!url) {
-    void katari.ui.toast("https の URL を入力してください", "warning");
+    void katari.ui.toast(katari.t("urlInvalid"), "warning");
     return;
   }
   if (isFavorite(scope, url)) return;
@@ -180,7 +261,7 @@ async function moveFavorite(scope: Scope, from: number, to: number): Promise<voi
 async function replaceFavorite(scope: Scope, index: number, raw: string): Promise<void> {
   const url = normalize(raw);
   if (!url) {
-    void katari.ui.toast("https の URL を入力してください", "warning");
+    void katari.ui.toast(katari.t("urlInvalid"), "warning");
     return;
   }
   const next = [...favorites[scope]];
@@ -188,7 +269,7 @@ async function replaceFavorite(scope: Scope, index: number, raw: string): Promis
   if (!current) return;
   if (current.url === url) return;
   if (next.some((f) => f.url === url)) {
-    void katari.ui.toast("同じ URL が既にあります", "warning");
+    void katari.ui.toast(katari.t("urlDuplicate"), "warning");
     return;
   }
   next[index] = { ...current, url };
@@ -217,37 +298,62 @@ function newFavoriteUrl(scope: Scope): string {
   }
 }
 
-const SCOPE_TITLE: Record<Scope, string> = {
-  editor: "エディタお気に入り",
-  project: "プロジェクトお気に入り",
-};
+function scopeTitle(scope: Scope): string {
+  return katari.t(scope === "editor" ? "favScopeEditor" : "favScopeProject");
+}
+
+// ---------------------------------------------------------------- ステータスバー
+
+/** ステータスバーの項目 id（1 拡張 3 件までのうち 1 件だけ使う）。 */
+const STATUS_ID = "favorites";
+
+/**
+ * お気に入りの件数をステータスバーへ出す。押すと新しいブラウザタブが開く。
+ *
+ * 「開いているタブ数」を出さないのは、拡張 API にビューが閉じられた通知が無く
+ * （ホスト側の `viewClosed` は Worker ランタイムが内部で処理して終わる）、
+ * 一度上がったカウントを下げる手段が無いため。件数は storage から常に正確に出せる。
+ */
+async function syncStatus(): Promise<void> {
+  if (!config.showStatus) {
+    await katari.status.clear(STATUS_ID);
+    return;
+  }
+  const count = favorites.editor.length + favorites.project.length;
+  await katari.status.set({
+    id: STATUS_ID,
+    text: katari.t("statusText", { count }),
+    tooltip: katari.t("statusTooltip"),
+    tone: "neutral",
+    command: "open",
+  });
+}
 
 // -------------------------------------------------------------- 設定タブ
 
 /** 設定タブ（プロジェクト設定 / エディタ設定）のお気に入り編集パネル。 */
 function renderFavPanel(scope: Scope) {
   return ui.column([
-    ui.heading(scope === "editor" ? "お気に入り URL（エディタ共通）" : "お気に入り URL（このプロジェクト）"),
-    ui.text(
-      scope === "editor"
-        ? "すべてのプロジェクトで共有されます。＋ で追加し、行をクリックして名前と URL を編集します。"
-        : "現在のプロジェクトにのみ保存されます（project-settings に含まれます）。＋ で追加し、行をクリックして名前と URL を編集します。",
-      { muted: true },
+    ui.heading(
+      katari.t(scope === "editor" ? "favPanelHeadingEditor" : "favPanelHeadingProject"),
     ),
+    ui.text(katari.t(scope === "editor" ? "favPanelHintEditor" : "favPanelHintProject"), {
+      muted: true,
+    }),
     ui.inspectorList({
       key: `fav:${scope}`,
-      title: SCOPE_TITLE[scope],
-      emptyText: "まだ登録がありません。＋ で追加できます。",
+      title: scopeTitle(scope),
+      emptyText: katari.t("favPanelEmpty"),
       // 一覧はページタイトル（未取得なら URL）で表示する。
       items: favorites[scope].map((fav, i) => ({
         id: fav.url,
         label: labelFor(fav),
         children: [
           ui.row([
-            ui.text("名前", { muted: true, key: `tl:${scope}:${i}` }),
+            ui.text(katari.t("fieldName"), { muted: true, key: `tl:${scope}:${i}` }),
             ui.textField({
               value: editInput[`title:${scope}:${i}`] ?? fav.title ?? "",
-              placeholder: "未設定なら URL を表示",
+              placeholder: katari.t("namePlaceholder"),
               key: `title:${scope}:${i}`,
               onChange: (v) => {
                 editInput[`title:${scope}:${i}`] = v;
@@ -255,7 +361,7 @@ function renderFavPanel(scope: Scope) {
               onSubmit: (v) => void renameFavorite(scope, i, v),
             }),
             ui.button({
-              label: "保存",
+              label: katari.t("save"),
               variant: "primary",
               key: `savetitle:${scope}:${i}`,
               onClick: () =>
@@ -263,10 +369,10 @@ function renderFavPanel(scope: Scope) {
             }),
           ]),
           ui.row([
-            ui.text("URL", { muted: true, key: `ul:${scope}:${i}` }),
+            ui.text(katari.t("fieldUrl"), { muted: true, key: `ul:${scope}:${i}` }),
             ui.textField({
               value: editInput[`url:${scope}:${i}`] ?? fav.url,
-              placeholder: "https://…",
+              placeholder: katari.t("urlPlaceholder"),
               key: `edit:${scope}:${i}`,
               onChange: (v) => {
                 editInput[`url:${scope}:${i}`] = v;
@@ -274,14 +380,14 @@ function renderFavPanel(scope: Scope) {
               onSubmit: (v) => void replaceFavorite(scope, i, v),
             }),
             ui.button({
-              label: "保存",
+              label: katari.t("save"),
               variant: "primary",
               key: `save:${scope}:${i}`,
               onClick: () =>
                 void replaceFavorite(scope, i, editInput[`url:${scope}:${i}`] ?? fav.url),
             }),
             ui.button({
-              label: "開く",
+              label: katari.t("open"),
               variant: "ghost",
               key: `open:${scope}:${i}`,
               onClick: () => openTab(fav.url),
@@ -305,15 +411,20 @@ katari.settings.panel("favProject", () => renderFavPanel("project"));
 // -------------------------------------------------------------- 履歴
 
 /**
- * 履歴の先頭に積む（直前と同じ URL は積まない）。
+ * 履歴の先頭に積む（直前と同じ URL は積まない）。件数の上限は宣言的設定
+ * `historyMax`（0 なら履歴を取らない）。
  *
  * **タイトルはここでは載せない**。エディタは URL とタイトルを 1 組で（URL → タイトルの順に）
  * 配ってくるので、直後の `onTitle` が先頭行へ正しい名前を書き込む。前ページのタイトルを
  * 引き継がせないために、あえて空で積む（タイトルの無いページは URL 表示のままになる）。
  */
 function pushHistory(tab: Tab, url: string): void {
+  if (config.historyMax <= 0) {
+    tab.history = [];
+    return;
+  }
   if (tab.history[0]?.url === url) return;
-  tab.history = [{ url }, ...tab.history].slice(0, HISTORY_MAX);
+  tab.history = [{ url }, ...tab.history].slice(0, config.historyMax);
 }
 
 /** タイトルが届いたら、現在ページ（履歴の先頭）に反映する。 */
@@ -328,7 +439,7 @@ function applyTitle(tab: Tab, title: string): void {
  * 予算に収まるまで**古い履歴から**落とす（URL は必ず残す）。
  */
 function tabState(tab: Tab): { url: string; history: Entry[] } {
-  let history = tab.history.slice(0, HISTORY_MAX);
+  let history = tab.history.slice(0, Math.max(0, config.historyMax));
   while (history.length > 0 && JSON.stringify({ url: tab.url, history }).length > STATE_BUDGET) {
     history = history.slice(0, -1);
   }
@@ -338,7 +449,7 @@ function tabState(tab: Tab): { url: string; history: Entry[] } {
 // -------------------------------------------------------------- ブラウザタブ
 
 function openTab(
-  initialUrl: string = HOME,
+  initialUrl: string = config.homeUrl,
   restoreId: string = newRestoreId(),
   near?: string,
   initialHistory: Entry[] = [],
@@ -348,7 +459,7 @@ function openTab(
     url: initialUrl,
     // 復元直後はタイトル未取得。最初の onTitle で埋まる。
     title: initialHistory.find((e) => e.url === initialUrl)?.title ?? "",
-    history: initialHistory.slice(0, HISTORY_MAX),
+    history: initialHistory.slice(0, Math.max(0, config.historyMax)),
   };
   let viewId = "";
 
@@ -360,11 +471,13 @@ function openTab(
   const navigate = (raw: string) => {
     const url = normalize(raw);
     if (!url) {
-      void katari.ui.toast("https の URL を入力してください", "warning");
+      void katari.ui.toast(katari.t("urlInvalid"), "warning");
       return;
     }
     tab.url = url;
     tab.input = url;
+    // 表示する直前に実効権限を引き直す（管理ウィンドウで取り消されていることがある）。
+    void syncWebviewPermission();
     katari.refresh();
   };
 
@@ -390,8 +503,8 @@ function openTab(
   const favList = (scope: Scope) =>
     ui.inspectorList({
       key: `fav:${scope}`,
-      title: SCOPE_TITLE[scope],
-      emptyText: "★ のトグルで現在のページを追加できます",
+      title: scopeTitle(scope),
+      emptyText: katari.t("favMenuEmpty"),
       // 一覧はページタイトル（未取得なら URL）で表示する。
       items: favorites[scope].map((fav) => ({ id: fav.url, label: labelFor(fav) })),
       onSelect: (id) => navigate(id),
@@ -411,13 +524,13 @@ function openTab(
       [
         ui.row([
           ui.checkbox({
-            label: "エディタお気に入り",
+            label: scopeTitle("editor"),
             value: isFavorite("editor", tab.url),
             key: "fav-toggle-editor",
             onChange: () => void toggleFavorite("editor", tab.url, tab.title),
           }),
           ui.checkbox({
-            label: "プロジェクトお気に入り",
+            label: scopeTitle("project"),
             value: isFavorite("project", tab.url),
             key: "fav-toggle-project",
             onChange: () => void toggleFavorite("project", tab.url, tab.title),
@@ -433,39 +546,71 @@ function openTab(
   const historyMenu = () =>
     ui.popover(
       "🕘",
-      [
-        ui.row([
-          ui.text(`${tab.history.length} 件（最大 ${HISTORY_MAX}）`, { muted: true, key: "hcount" }),
-          ui.button({
-            label: "履歴を消去",
-            variant: "ghost",
-            disabled: tab.history.length === 0,
-            onClick: () => {
-              tab.history = [];
-              persist();
-              katari.refresh();
-            },
-          }),
-        ]),
-        ui.inspectorList({
-          key: "history",
-          title: "履歴（新しい順）",
-          emptyText: "まだ移動していません",
-          // 履歴は時系列なので並べ替えは無効（ハンドルも出さない）。
-          reorderDisabled: true,
-          // 同じ URL を何度も訪れるので、id には位置を混ぜて一意にする。
-          // 履歴もページタイトル（未取得なら URL）で表示する。
-        items: tab.history.map((entry, i) => ({ id: `${i}:${entry.url}`, label: labelFor(entry) })),
-          onSelect: (id) => navigate(id.slice(id.indexOf(":") + 1)),
-          onRemove: ({ index }) => {
-            tab.history = tab.history.filter((_, i) => i !== index);
-            persist();
-            katari.refresh();
-          },
-        }),
-      ],
+      config.historyMax <= 0
+        ? [ui.text(katari.t("historyOff"), { muted: true, key: "hoff" })]
+        : [
+            ui.row([
+              ui.text(
+                katari.t("historyCount", { count: tab.history.length, max: config.historyMax }),
+                { muted: true, key: "hcount" },
+              ),
+              ui.button({
+                label: katari.t("historyClear"),
+                variant: "ghost",
+                disabled: tab.history.length === 0,
+                onClick: () => {
+                  tab.history = [];
+                  persist();
+                  katari.refresh();
+                },
+              }),
+            ]),
+            ui.inspectorList({
+              key: "history",
+              title: katari.t("historyTitle"),
+              emptyText: katari.t("historyEmpty"),
+              // 履歴は時系列なので並べ替えは無効（ハンドルも出さない）。
+              reorderDisabled: true,
+              // 同じ URL を何度も訪れるので、id には位置を混ぜて一意にする。
+              // 履歴もページタイトル（未取得なら URL）で表示する。
+              items: tab.history.map((entry, i) => ({
+                id: `${i}:${entry.url}`,
+                label: labelFor(entry),
+              })),
+              onSelect: (id) => navigate(id.slice(id.indexOf(":") + 1)),
+              onRemove: ({ index }) => {
+                tab.history = tab.history.filter((_, i) => i !== index);
+                persist();
+                katari.refresh();
+              },
+            }),
+          ],
       { key: "history-menu", variant: "ghost", width: 360 },
     );
+
+  /**
+   * `webview:*` がまだ無いときにページの代わりに出すゲート。
+   * 承認画面ではなくここで尋ねるのが任意権限の趣旨（ADR-0084）。
+   */
+  const permissionGate = () =>
+    ui.column([
+      ui.heading(katari.t("permHeading")),
+      ui.text(katari.t("permBody"), { muted: true }),
+      ...(webviewDenied
+        ? [
+            ui.text(katari.t("permDenied", { label: katari.t("permGrant") }), {
+              muted: true,
+              key: "perm-denied",
+            }),
+          ]
+        : []),
+      ui.button({
+        label: katari.t("permGrant"),
+        variant: "primary",
+        key: "perm-grant",
+        onClick: () => void ensureWebviewPermission(),
+      }),
+    ]);
 
   viewId = katari.window.open({
     title: hostOf(initialUrl),
@@ -485,7 +630,7 @@ function openTab(
           ui.button({ label: "⟳", variant: "ghost", onClick: () => void katari.window.webviewReload(viewId) }),
           ui.textField({
             value: tab.input,
-            placeholder: "https://…",
+            placeholder: katari.t("urlPlaceholder"),
             key: "url",
             onChange: (v) => {
               tab.input = v;
@@ -496,18 +641,27 @@ function openTab(
           favMenu(favorited),
           historyMenu(),
           // 新しいタブは、この（元）タブの隣に開く。
-          ui.button({ label: "＋", variant: "ghost", onClick: () => openTab(HOME, newRestoreId(), viewId) }),
+          ui.button({
+            label: "＋",
+            variant: "ghost",
+            onClick: () => openTab(config.homeUrl, newRestoreId(), viewId),
+          }),
         ]),
-        ui.webview({
-          url: tab.url,
-          grow: true,
-          native: true,
-          onNavigate,
-          onTitle,
-        }),
+        // 権限が無い / 取り消されたときはページの代わりに許可を求める（webview は描かない）。
+        webviewGranted
+          ? ui.webview({
+              url: tab.url,
+              grow: true,
+              native: true,
+              onNavigate,
+              onTitle,
+            })
+          : permissionGate(),
       ]);
     },
   });
+  // タブを開くのは「これから表示する」ということなので、ここで許可を求める。
+  void ensureWebviewPermission();
   return viewId;
 }
 
@@ -518,9 +672,22 @@ katari.commands.register("open", () => {
 // 再起動時、前回開いていたブラウザタブを同じ URL・履歴で復元する（Dock 位置は本体が保持）。
 katari.window.onRestore((restoreId, state) => {
   const rec = state && typeof state === "object" ? (state as Record<string, unknown>) : {};
-  const url = typeof rec.url === "string" ? rec.url : HOME;
+  const url = typeof rec.url === "string" ? rec.url : config.homeUrl;
   openTab(url, restoreId, undefined, asEntries(rec.history));
 });
 
-// 起動時にお気に入りをロードする（onStartup activation）。
-void loadFavorites();
+// ユーザーが宣言的設定を編集したら読み直して描き直す（フォームはエディタが描いている）。
+katari.config.onChange(() => {
+  void (async () => {
+    await loadConfig();
+    await syncStatus();
+    katari.refresh();
+  })();
+});
+
+// 起動時に設定 → お気に入りの順にロードする（onStartup activation）。
+// 設定を先に読むのは、onRestore / openTab が homeUrl と historyMax を見るため。
+void (async () => {
+  await loadConfig();
+  await loadFavorites();
+})();
