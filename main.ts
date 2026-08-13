@@ -14,11 +14,16 @@ import { katari, ui } from "@katari/ext";
 
 type Scope = "editor" | "project";
 
+/** 一覧に出す 1 件。表示は `title`（無ければ URL から作ったラベル）。 */
+type Entry = { url: string; title?: string };
+
 type Tab = {
   input: string;
   url: string;
+  /** 現在ページのタイトル（`onTitle` 追従。履歴 / お気に入りの表示名に使う）。 */
+  title: string;
   /** 訪問履歴（新しい順、重複した連続 URL は積まない）。 */
-  history: string[];
+  history: Entry[];
 };
 
 // native 子 webview 描画なので、X-Frame-Options で埋め込みを拒否するサイトも初期ページにできる。
@@ -32,9 +37,9 @@ const HISTORY_MAX = 20;
  */
 const STATE_BUDGET = 3000;
 
-// お気に入り URL（scope ごと）。onStartup で storage からロードするモジュールキャッシュ。
-const favorites: Record<Scope, string[]> = { editor: [], project: [] };
-// 設定パネルで行を開いて URL を編集中のバッファ（`${scope}:${index}` → 入力値）。
+// お気に入り（scope ごと）。onStartup で storage からロードするモジュールキャッシュ。
+const favorites: Record<Scope, Entry[]> = { editor: [], project: [] };
+// 設定パネルで編集中のバッファ（`url:<scope>:<index>` / `title:<scope>:<index>` → 入力値）。
 const editInput: Record<string, string> = {};
 /** 設定タブの `＋` で追加する既定 URL（追加後に行を開いて編集する前提）。 */
 const NEW_FAVORITE_BASE = "https://example.com/";
@@ -65,7 +70,7 @@ function hostOf(url: string): string {
   }
 }
 
-/** 一覧行のラベル。scheme を落として「ホスト + パス」にする（幅は UI 側で省略表示）。 */
+/** タイトルが無いときのラベル。scheme を落として「ホスト + パス」にする。 */
 function labelOf(url: string): string {
   try {
     const u = new URL(url);
@@ -76,49 +81,89 @@ function labelOf(url: string): string {
   }
 }
 
-function asUrlList(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+/** 一覧行の表示名。ページタイトルを優先し、無ければ URL から作る。 */
+function labelFor(entry: Entry): string {
+  const title = entry.title?.trim();
+  return title ? title : labelOf(entry.url);
+}
+
+/** 保存値を Entry 列にする。**旧形式（URL の文字列配列）も受ける**。 */
+function asEntries(value: unknown): Entry[] {
+  if (!Array.isArray(value)) return [];
+  const out: Entry[] = [];
+  for (const item of value) {
+    if (typeof item === "string") {
+      out.push({ url: item });
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    if (typeof rec.url !== "string") continue;
+    out.push({
+      url: rec.url,
+      ...(typeof rec.title === "string" && rec.title ? { title: rec.title } : {}),
+    });
+  }
+  return out;
 }
 
 // -------------------------------------------------------------- お気に入り
 
 async function loadFavorites(): Promise<void> {
-  favorites.editor = asUrlList(await katari.storage.editor.get("favorites"));
-  favorites.project = asUrlList(await katari.storage.project.get("favorites"));
+  favorites.editor = asEntries(await katari.storage.editor.get("favorites"));
+  favorites.project = asEntries(await katari.storage.project.get("favorites"));
   katari.refresh(); // ロード完了後に設定パネル / ブラウザ view を描き直す。
 }
 
-async function saveFavorites(scope: Scope, next: string[]): Promise<void> {
+async function saveFavorites(scope: Scope, next: Entry[]): Promise<void> {
   favorites[scope] = next;
   await katari.storage[scope].set("favorites", next);
   katari.refresh();
 }
 
 function isFavorite(scope: Scope, url: string): boolean {
-  return favorites[scope].includes(url);
+  return favorites[scope].some((f) => f.url === url);
 }
 
-async function addFavorite(scope: Scope, raw: string): Promise<void> {
+async function addFavorite(scope: Scope, raw: string, title?: string): Promise<void> {
   const url = normalize(raw);
   if (!url) {
     void katari.ui.toast("https の URL を入力してください", "warning");
     return;
   }
-  if (favorites[scope].includes(url)) return;
-  await saveFavorites(scope, [...favorites[scope], url]);
+  if (isFavorite(scope, url)) return;
+  const name = title?.trim();
+  await saveFavorites(scope, [...favorites[scope], name ? { url, title: name } : { url }]);
 }
 
 async function removeFavorite(scope: Scope, url: string): Promise<void> {
   await saveFavorites(
     scope,
-    favorites[scope].filter((u) => u !== url),
+    favorites[scope].filter((f) => f.url !== url),
   );
 }
 
 /** 現在ページのお気に入り登録をトグルする（メニューのチェックボックス）。 */
-async function toggleFavorite(scope: Scope, url: string): Promise<void> {
+async function toggleFavorite(scope: Scope, url: string, title?: string): Promise<void> {
   if (isFavorite(scope, url)) await removeFavorite(scope, url);
-  else await addFavorite(scope, url);
+  else await addFavorite(scope, url, title);
+}
+
+/**
+ * 現在ページのタイトルを、同じ URL のお気に入りへ書き戻す（タイトル未設定のものだけ）。
+ * 旧形式で保存された URL だけのお気に入りも、一度開けば名前が付く。
+ */
+async function fillFavoriteTitle(url: string, title: string): Promise<void> {
+  const name = title.trim();
+  if (!name) return;
+  for (const scope of ["editor", "project"] as const) {
+    const list = favorites[scope];
+    if (!list.some((f) => f.url === url && !f.title)) continue;
+    await saveFavorites(
+      scope,
+      list.map((f) => (f.url === url && !f.title ? { ...f, title: name } : f)),
+    );
+  }
 }
 
 /** ドラッグ並べ替え。`to` は from を抜いたあとの挿入位置。 */
@@ -131,7 +176,7 @@ async function moveFavorite(scope: Scope, from: number, to: number): Promise<voi
   await saveFavorites(scope, next);
 }
 
-/** 設定タブで行を開いて URL を編集したときの置き換え。 */
+/** 設定タブで行を開いて URL を編集したときの置き換え（タイトルは維持する）。 */
 async function replaceFavorite(scope: Scope, index: number, raw: string): Promise<void> {
   const url = normalize(raw);
   if (!url) {
@@ -139,23 +184,36 @@ async function replaceFavorite(scope: Scope, index: number, raw: string): Promis
     return;
   }
   const next = [...favorites[scope]];
-  if (index < 0 || index >= next.length) return;
-  if (next[index] === url) return;
-  if (next.includes(url)) {
+  const current = next[index];
+  if (!current) return;
+  if (current.url === url) return;
+  if (next.some((f) => f.url === url)) {
     void katari.ui.toast("同じ URL が既にあります", "warning");
     return;
   }
-  next[index] = url;
-  delete editInput[`${scope}:${index}`];
+  next[index] = { ...current, url };
+  delete editInput[`url:${scope}:${index}`];
+  await saveFavorites(scope, next);
+}
+
+/** 設定タブで表示名（タイトル）を編集したときの置き換え。空にすると URL 表示へ戻る。 */
+async function renameFavorite(scope: Scope, index: number, raw: string): Promise<void> {
+  const next = [...favorites[scope]];
+  const current = next[index];
+  if (!current) return;
+  const title = raw.trim();
+  next[index] = title ? { ...current, title } : { url: current.url };
+  delete editInput[`title:${scope}:${index}`];
   await saveFavorites(scope, next);
 }
 
 /** `＋` で足す既定 URL。既にあれば連番を付けて必ず新しい行になるようにする。 */
 function newFavoriteUrl(scope: Scope): string {
-  if (!favorites[scope].includes(NEW_FAVORITE_BASE)) return NEW_FAVORITE_BASE;
+  const has = (u: string) => favorites[scope].some((f) => f.url === u);
+  if (!has(NEW_FAVORITE_BASE)) return NEW_FAVORITE_BASE;
   for (let i = 2; ; i++) {
     const candidate = `${NEW_FAVORITE_BASE}${i}`;
-    if (!favorites[scope].includes(candidate)) return candidate;
+    if (!has(candidate)) return candidate;
   }
 }
 
@@ -172,25 +230,46 @@ function renderFavPanel(scope: Scope) {
     ui.heading(scope === "editor" ? "お気に入り URL（エディタ共通）" : "お気に入り URL（このプロジェクト）"),
     ui.text(
       scope === "editor"
-        ? "すべてのプロジェクトで共有されます。＋ で追加し、行をクリックして URL を編集します。"
-        : "現在のプロジェクトにのみ保存されます（project-settings に含まれます）。＋ で追加し、行をクリックして URL を編集します。",
+        ? "すべてのプロジェクトで共有されます。＋ で追加し、行をクリックして名前と URL を編集します。"
+        : "現在のプロジェクトにのみ保存されます（project-settings に含まれます）。＋ で追加し、行をクリックして名前と URL を編集します。",
       { muted: true },
     ),
     ui.inspectorList({
       key: `fav:${scope}`,
       title: SCOPE_TITLE[scope],
-      emptyText: "まだ登録がありません。下の欄から追加できます。",
-      items: favorites[scope].map((url, i) => ({
-        id: url,
-        label: labelOf(url),
+      emptyText: "まだ登録がありません。＋ で追加できます。",
+      // 一覧はページタイトル（未取得なら URL）で表示する。
+      items: favorites[scope].map((fav, i) => ({
+        id: fav.url,
+        label: labelFor(fav),
         children: [
           ui.row([
+            ui.text("名前", { muted: true, key: `tl:${scope}:${i}` }),
             ui.textField({
-              value: editInput[`${scope}:${i}`] ?? url,
+              value: editInput[`title:${scope}:${i}`] ?? fav.title ?? "",
+              placeholder: "未設定なら URL を表示",
+              key: `title:${scope}:${i}`,
+              onChange: (v) => {
+                editInput[`title:${scope}:${i}`] = v;
+              },
+              onSubmit: (v) => void renameFavorite(scope, i, v),
+            }),
+            ui.button({
+              label: "保存",
+              variant: "primary",
+              key: `savetitle:${scope}:${i}`,
+              onClick: () =>
+                void renameFavorite(scope, i, editInput[`title:${scope}:${i}`] ?? fav.title ?? ""),
+            }),
+          ]),
+          ui.row([
+            ui.text("URL", { muted: true, key: `ul:${scope}:${i}` }),
+            ui.textField({
+              value: editInput[`url:${scope}:${i}`] ?? fav.url,
               placeholder: "https://…",
               key: `edit:${scope}:${i}`,
               onChange: (v) => {
-                editInput[`${scope}:${i}`] = v;
+                editInput[`url:${scope}:${i}`] = v;
               },
               onSubmit: (v) => void replaceFavorite(scope, i, v),
             }),
@@ -198,13 +277,14 @@ function renderFavPanel(scope: Scope) {
               label: "保存",
               variant: "primary",
               key: `save:${scope}:${i}`,
-              onClick: () => void replaceFavorite(scope, i, editInput[`${scope}:${i}`] ?? url),
+              onClick: () =>
+                void replaceFavorite(scope, i, editInput[`url:${scope}:${i}`] ?? fav.url),
             }),
             ui.button({
               label: "開く",
               variant: "ghost",
               key: `open:${scope}:${i}`,
-              onClick: () => openTab(url),
+              onClick: () => openTab(fav.url),
             }),
           ]),
         ],
@@ -224,17 +304,30 @@ katari.settings.panel("favProject", () => renderFavPanel("project"));
 
 // -------------------------------------------------------------- 履歴
 
-/** 履歴の先頭に積む（直前と同じ URL は積まない）。 */
+/**
+ * 履歴の先頭に積む（直前と同じ URL は積まない）。
+ *
+ * **タイトルはここでは載せない**。エディタは URL とタイトルを 1 組で（URL → タイトルの順に）
+ * 配ってくるので、直後の `onTitle` が先頭行へ正しい名前を書き込む。前ページのタイトルを
+ * 引き継がせないために、あえて空で積む（タイトルの無いページは URL 表示のままになる）。
+ */
 function pushHistory(tab: Tab, url: string): void {
-  if (tab.history[0] === url) return;
-  tab.history = [url, ...tab.history].slice(0, HISTORY_MAX);
+  if (tab.history[0]?.url === url) return;
+  tab.history = [{ url }, ...tab.history].slice(0, HISTORY_MAX);
+}
+
+/** タイトルが届いたら、現在ページ（履歴の先頭）に反映する。 */
+function applyTitle(tab: Tab, title: string): void {
+  tab.title = title;
+  const head = tab.history[0];
+  if (head && head.url === tab.url) head.title = title.trim() || undefined;
 }
 
 /**
  * タブ状態（`window.setState` に渡す値）。本体は JSON 4KB 超の state を丸ごと捨てるので、
  * 予算に収まるまで**古い履歴から**落とす（URL は必ず残す）。
  */
-function tabState(tab: Tab): { url: string; history: string[] } {
+function tabState(tab: Tab): { url: string; history: Entry[] } {
   let history = tab.history.slice(0, HISTORY_MAX);
   while (history.length > 0 && JSON.stringify({ url: tab.url, history }).length > STATE_BUDGET) {
     history = history.slice(0, -1);
@@ -248,11 +341,13 @@ function openTab(
   initialUrl: string = HOME,
   restoreId: string = newRestoreId(),
   near?: string,
-  initialHistory: string[] = [],
+  initialHistory: Entry[] = [],
 ) {
   const tab: Tab = {
     input: initialUrl,
     url: initialUrl,
+    // 復元直後はタイトル未取得。最初の onTitle で埋まる。
+    title: initialHistory.find((e) => e.url === initialUrl)?.title ?? "",
     history: initialHistory.slice(0, HISTORY_MAX),
   };
   let viewId = "";
@@ -280,9 +375,15 @@ function openTab(
     pushHistory(tab, url);
     persist();
   };
-  // ページタイトルをタブ名にする。
+  // ページタイトルはタブ名 + 履歴 / お気に入りの表示名に使う。
   const onTitle = (title: string) => {
-    if (viewId && title) katari.window.setTitle(viewId, title);
+    if (!title) return;
+    if (viewId) katari.window.setTitle(viewId, title);
+    applyTitle(tab, title);
+    // 名前の無いお気に入り（旧形式 / 設定タブで足した行）に名前を付ける。
+    void fillFavoriteTitle(tab.url, title);
+    persist();
+    katari.refresh();
   };
 
   /** お気に入り一覧（scope 1 つ分）。クリックで移動、× で削除、ドラッグで並べ替え。 */
@@ -291,7 +392,8 @@ function openTab(
       key: `fav:${scope}`,
       title: SCOPE_TITLE[scope],
       emptyText: "★ のトグルで現在のページを追加できます",
-      items: favorites[scope].map((url) => ({ id: url, label: labelOf(url) })),
+      // 一覧はページタイトル（未取得なら URL）で表示する。
+      items: favorites[scope].map((fav) => ({ id: fav.url, label: labelFor(fav) })),
       onSelect: (id) => navigate(id),
       onRemove: ({ id }) => {
         if (id) void removeFavorite(scope, id);
@@ -312,13 +414,13 @@ function openTab(
             label: "エディタお気に入り",
             value: isFavorite("editor", tab.url),
             key: "fav-toggle-editor",
-            onChange: () => void toggleFavorite("editor", tab.url),
+            onChange: () => void toggleFavorite("editor", tab.url, tab.title),
           }),
           ui.checkbox({
             label: "プロジェクトお気に入り",
             value: isFavorite("project", tab.url),
             key: "fav-toggle-project",
-            onChange: () => void toggleFavorite("project", tab.url),
+            onChange: () => void toggleFavorite("project", tab.url, tab.title),
           }),
         ]),
         favList("editor"),
@@ -352,7 +454,8 @@ function openTab(
           // 履歴は時系列なので並べ替えは無効（ハンドルも出さない）。
           reorderDisabled: true,
           // 同じ URL を何度も訪れるので、id には位置を混ぜて一意にする。
-          items: tab.history.map((url, i) => ({ id: `${i}:${url}`, label: labelOf(url) })),
+          // 履歴もページタイトル（未取得なら URL）で表示する。
+        items: tab.history.map((entry, i) => ({ id: `${i}:${entry.url}`, label: labelFor(entry) })),
           onSelect: (id) => navigate(id.slice(id.indexOf(":") + 1)),
           onRemove: ({ index }) => {
             tab.history = tab.history.filter((_, i) => i !== index);
@@ -369,7 +472,7 @@ function openTab(
     width: 900,
     height: 640,
     restoreId,
-    state: { url: initialUrl, history: tab.history },
+    state: tabState(tab),
     icon: "🌐",
     near,
     render: () => {
@@ -416,7 +519,7 @@ katari.commands.register("open", () => {
 katari.window.onRestore((restoreId, state) => {
   const rec = state && typeof state === "object" ? (state as Record<string, unknown>) : {};
   const url = typeof rec.url === "string" ? rec.url : HOME;
-  openTab(url, restoreId, undefined, asUrlList(rec.history));
+  openTab(url, restoreId, undefined, asEntries(rec.history));
 });
 
 // 起動時にお気に入りをロードする（onStartup activation）。
